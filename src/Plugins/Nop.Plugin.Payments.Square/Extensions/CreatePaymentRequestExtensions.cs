@@ -1,42 +1,36 @@
-﻿using Nop.Plugin.Payments.Square.Domain;
+﻿using Square.Core.Models;
 using Square.Models;
 
 namespace Nop.Plugin.Payments.Square.Extensions;
 
-/// <summary>
-/// Extension methods for <see cref="CreatePaymentRequest"/>.
-/// </summary>
 public static class CreatePaymentRequestExtensions
 {
     #region Methods
 
     /// <summary>
-    /// Creates a extended <see cref="CreatePaymentRequest"/> with integration id.
+    /// Returns a copy of the request that also sends Square's "integration_id" field
     /// </summary>
-    /// <param name="paymentRequest">Request to create payment</param>
-    /// <param name="integrationId">An extra parameter in the request in order to track revenue share transaction attribution from 3rd party merchant/developer hosted apps (where the application id will not be known up front).</param>
-    /// <returns>The extended request to create payment</returns>
-    public static ExtendedCreatePaymentRequest ToExtendedRequest(this CreatePaymentRequest paymentRequest, string integrationId)
+    /// <remarks>
+    /// CreatePaymentRequest does not declare "integration_id", so it travels in the model's extension-data bag,
+    /// whose entries are written into the request's JSON object under their wire names. The copy gets its own bag,
+    /// so the original request is left unchanged.
+    /// </remarks>
+    /// <param name="paymentRequest">Payment request</param>
+    /// <param name="integrationId">Integration ID; nothing is added when it is empty</param>
+    /// <returns>The payment request to send</returns>
+    public static CreatePaymentRequest WithIntegrationId(this CreatePaymentRequest paymentRequest, string integrationId)
     {
-        return new ExtendedCreatePaymentRequest(sourceId: paymentRequest.SourceId,
-            idempotencyKey: paymentRequest.IdempotencyKey,
-            amountMoney: paymentRequest.AmountMoney,
-            tipMoney: paymentRequest.TipMoney,
-            appFeeMoney: paymentRequest.AppFeeMoney,
-            integrationId: integrationId,
-            delayDuration: paymentRequest.DelayDuration,
-            autocomplete: paymentRequest.Autocomplete,
-            orderId: paymentRequest.OrderId,
-            customerId: paymentRequest.CustomerId,
-            locationId: paymentRequest.LocationId,
-            referenceId: paymentRequest.ReferenceId,
-            verificationToken: paymentRequest.VerificationToken,
-            acceptPartialAuthorization: paymentRequest.AcceptPartialAuthorization,
-            buyerEmailAddress: paymentRequest.BuyerEmailAddress,
-            billingAddress: paymentRequest.BillingAddress,
-            shippingAddress: paymentRequest.ShippingAddress,
-            note: paymentRequest.Note,
-            statementDescriptionIdentifier: paymentRequest.StatementDescriptionIdentifier);
+        ArgumentNullException.ThrowIfNull(paymentRequest);
+
+        if (string.IsNullOrEmpty(integrationId))
+            return paymentRequest;
+
+        var additionalProperties = new AdditionalProperties();
+        foreach (var (key, value) in paymentRequest.AdditionalProperties)
+            additionalProperties[key] = value;
+        additionalProperties.Set("integration_id", integrationId);
+
+        return paymentRequest with { AdditionalProperties = additionalProperties };
     }
 
     #endregion

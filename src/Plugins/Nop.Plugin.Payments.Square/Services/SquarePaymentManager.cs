@@ -1,12 +1,22 @@
-﻿using Microsoft.AspNetCore.WebUtilities;
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Logging.Abstractions;
 using Nop.Core;
 using Nop.Services.Configuration;
 using Nop.Services.Logging;
 using Square;
-using Square.Authentication;
-using Square.Exceptions;
+using Square.Core.Configuration;
+using Square.Core.ErrorResponse;
+using Square.Core.Exceptions;
+using Square.Core.Hooks;
 using Square.Models;
-using SquareSdk = Square;
+using Square.Requests.Cards;
+using Square.Requests.Customers;
+using Square.Requests.Locations;
+using Square.Requests.Payments;
+using Square.Requests.Refunds;
+using Square.Servers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -17,6 +27,7 @@ public class SquarePaymentManager
 {
     #region Fields
 
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger _logger;
     private readonly ISettingService _settingService;
     private readonly IWorkContext _workContext;
@@ -26,11 +37,13 @@ public class SquarePaymentManager
 
     #region Ctor
 
-    public SquarePaymentManager(ILogger logger,
+    public SquarePaymentManager(IHttpClientFactory httpClientFactory,
+        ILogger logger,
         ISettingService settingService,
         IWorkContext workContext,
         SquareAuthorizationHttpClient squareAuthorizationHttpClient)
     {
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
         _settingService = settingService;
         _workContext = workContext;
@@ -46,7 +59,7 @@ public class SquarePaymentManager
     /// </summary>
     /// <param name="storeId">Store identifier for which configuration should be loaded</param>
     /// <returns>The asynchronous task whose result contains the Square Client</returns>
-    private async Task<ISquareClient> CreateSquareClientAsync(int storeId)
+    private async Task<SquareClient> CreateSquareClientAsync(int storeId)
     {
         var settings = await _settingService.LoadSettingAsync<SquarePaymentSettings>(storeId);
 
@@ -54,16 +67,29 @@ public class SquarePaymentManager
         if (settings.UseSandbox && string.IsNullOrEmpty(settings.AccessToken))
             throw new NopException("Sandbox access token should not be empty");
 
-        var client = new SquareClient.Builder()
-            .BearerAuthCredentials(new BearerAuthModel.Builder(settings.AccessToken).Build())
-            .AddAdditionalHeader("user-agent", SquarePaymentDefaults.UserAgent);
+        //settings are per store and read on every call, so the client is built per call;
+        //the HttpClient comes from the factory (bounded attempts, store proxy settings)
+        var options = new SquareClientOptions
+        {
+            BearerAuth = settings.AccessToken,
+            Environment = settings.UseSandbox ? ServerEnvironment.Environment2 : ServerEnvironment.Production,
+            Retry = RetryOptions.Default() with { Timeout = SquarePaymentDefaults.RequestTimeout },
+            //set explicitly: an unset factory lets the SQUARE_LOG variable log request bodies (card nonces, addresses)
+            Logging = new LoggingOptions { LoggerFactory = NullLoggerFactory.Instance },
+            Hooks =
+            [
+                SdkHook.OnRequest((request, _) =>
+                {
+                    request.Headers.Remove("User-Agent");
+                    request.Headers.TryAddWithoutValidation("User-Agent", SquarePaymentDefaults.UserAgent);
+                })
+            ]
+        };
 
-        client.Environment(settings.UseSandbox ? SquareSdk.Environment.Sandbox : SquareSdk.Environment.Production);
-
-        return client.Build();
+        return new SquareClient(_httpClientFactory.CreateClient(SquarePaymentDefaults.SdkHttpClientName), options);
     }
 
-    private void ThrowErrorsIfExists(IList<Error> errors)
+    private void ThrowErrorsIfExists(IReadOnlyList<Error> errors)
     {
         //check whether there are errors in the service response
         if (!(errors?.Any() ?? false))
@@ -82,16 +108,38 @@ public class SquarePaymentManager
         var errorMessage = exception.Message;
         await _logger.ErrorAsync($"Square payment error: {errorMessage}.", exception, await _workContext.GetCurrentCustomerAsync());
 
-        // check Square exception
-        if (exception is not ApiException apiException)
-            return errorMessage;
-
-        //try to get error details
-        if (apiException.Errors?.Any() ?? false)
-            errorMessage = string.Join(";", apiException.Errors.Select(error => error.Detail));
+        //every operation reports errors as a raw body (Case B); read Square's error details from it
+        if (exception is ApiException<RawError> apiException)
+            errorMessage = ReadErrorDetails(apiException) ?? errorMessage;
 
         return errorMessage;
     }
+
+    /// <summary>
+    /// Reads the "errors[].detail" of a Square error body; null when the body carries none
+    /// </summary>
+    private static string ReadErrorDetails(ApiException<RawError> exception)
+    {
+        try
+        {
+            var details = exception.Error.ReadAsJson<SquareErrorBody>()?.Errors?
+                .Select(error => error.Detail)
+                .Where(detail => !string.IsNullOrEmpty(detail))
+                .ToList();
+
+            return details?.Any() == true ? string.Join(";", details) : null;
+        }
+        catch (JsonException)
+        {
+            //not JSON (a gateway or proxy page): keep the exception message, which names the call and status
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Square's error envelope: the "errors" member every response model declares
+    /// </summary>
+    private sealed record SquareErrorBody([property: JsonPropertyName("errors")] IReadOnlyList<Error> Errors);
 
     #endregion
 
@@ -114,7 +162,7 @@ public class SquarePaymentManager
 
         try
         {
-            var locationResponse = await client.LocationsApi.RetrieveLocationAsync(settings.LocationId) ?? throw new NopException("No service response");
+            var locationResponse = await client.Locations.RetrieveLocation(new RetrieveLocationRequest { LocationId = settings.LocationId }) ?? throw new NopException("No service response");
 
             ThrowErrorsIfExists(locationResponse.Errors);
 
@@ -145,7 +193,7 @@ public class SquarePaymentManager
 
         try
         {
-            var listLocationsResponse = await client.LocationsApi.ListLocationsAsync();
+            var listLocationsResponse = await client.Locations.ListLocations();
 
             if (listLocationsResponse == null)
                 throw new NopException("No service response");
@@ -187,7 +235,7 @@ public class SquarePaymentManager
         try
         {
             //get customer by identifier
-            var retrieveCustomerResponse = await client.CustomersApi.RetrieveCustomerAsync(customerId);
+            var retrieveCustomerResponse = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = customerId });
             if (retrieveCustomerResponse == null)
                 throw new NopException("No service response");
 
@@ -219,7 +267,7 @@ public class SquarePaymentManager
         try
         {
             //create the new customer
-            var createCustomerResponse = await client.CustomersApi.CreateCustomerAsync(customerRequest);
+            var createCustomerResponse = await client.Customers.CreateCustomer(new CreateCustomerOperationRequest { Body = customerRequest });
             if (createCustomerResponse == null)
                 throw new NopException("No service response");
 
@@ -251,7 +299,7 @@ public class SquarePaymentManager
         try
         {
             //create the new card of the customer
-            var createCustomerCardResponse = await client.CardsApi.CreateCardAsync(cardRequest);
+            var createCustomerCardResponse = await client.Cards.CreateCard(new CreateCardOperationRequest { Body = cardRequest });
             if (createCustomerCardResponse == null)
                 throw new NopException("No service response");
 
@@ -286,7 +334,7 @@ public class SquarePaymentManager
 
         try
         {
-            var paymentResponse = await client.PaymentsApi.CreatePaymentAsync(paymentRequest);
+            var paymentResponse = await client.Payments.CreatePayment(new CreatePaymentOperationRequest { Body = paymentRequest });
             if (paymentResponse == null)
                 throw new NopException("No service response");
 
@@ -316,7 +364,7 @@ public class SquarePaymentManager
 
         try
         {
-            var paymentResponse = await client.PaymentsApi.CompletePaymentAsync(paymentId, completePaymentRequest) ?? throw new NopException("No service response");
+            var paymentResponse = await client.Payments.CompletePayment(new CompletePaymentOperationRequest { PaymentId = paymentId, Body = completePaymentRequest }) ?? throw new NopException("No service response");
 
             ThrowErrorsIfExists(paymentResponse.Errors);
 
@@ -344,7 +392,7 @@ public class SquarePaymentManager
 
         try
         {
-            var paymentResponse = await client.PaymentsApi.CancelPaymentAsync(paymentId);
+            var paymentResponse = await client.Payments.CancelPayment(new CancelPaymentRequest { PaymentId = paymentId });
             if (paymentResponse == null)
                 throw new NopException("No service response");
 
@@ -374,7 +422,7 @@ public class SquarePaymentManager
 
         try
         {
-            var refundPaymentResponse = await client.RefundsApi.RefundPaymentAsync(refundPaymentRequest);
+            var refundPaymentResponse = await client.Refunds.RefundPayment(new RefundPaymentOperationRequest { Body = refundPaymentRequest });
             if (refundPaymentResponse == null)
                 throw new NopException("No service response");
 

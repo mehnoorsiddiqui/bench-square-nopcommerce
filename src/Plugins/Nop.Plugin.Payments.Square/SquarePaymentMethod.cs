@@ -176,7 +176,7 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
     /// <param name="paymentRequest">Payment request parameters</param>
     /// <param name="isRecurringPayment">Whether it is a recurring payment</param>
     /// <returns>The asynchronous task whose result contains the Charge request parameters</returns>
-    private async Task<ExtendedCreatePaymentRequest> CreatePaymentRequestAsync(ProcessPaymentRequest paymentRequest, bool isRecurringPayment)
+    private async Task<SquareModel.CreatePaymentRequest> CreatePaymentRequestAsync(ProcessPaymentRequest paymentRequest, bool isRecurringPayment)
     {
         //get customer
         var customer = await _customerService.GetCustomerByIdAsync(paymentRequest.CustomerId);
@@ -203,18 +203,18 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
             var country = await _countryService.GetCountryByAddressAsync(address);
 
             return new SquareModel.Address
-            (
-                addressLine1: CommonHelper.EnsureMaximumLength(address.Address1, 500),
-                addressLine2: CommonHelper.EnsureMaximumLength(address.Address2, 500),
-                administrativeDistrictLevel1: CommonHelper.EnsureMaximumLength((await _stateProvinceService.GetStateProvinceByAddressAsync(address))?.Abbreviation, 200),
-                administrativeDistrictLevel2: CommonHelper.EnsureMaximumLength(address.County, 200),
-                country: string.Equals(country?.TwoLetterIsoCode, new RegionInfo(country?.TwoLetterIsoCode).TwoLetterISORegionName, StringComparison.InvariantCultureIgnoreCase)
+            {
+                AddressLine1 = CommonHelper.EnsureMaximumLength(address.Address1, 500),
+                AddressLine2 = CommonHelper.EnsureMaximumLength(address.Address2, 500),
+                AdministrativeDistrictLevel1 = CommonHelper.EnsureMaximumLength((await _stateProvinceService.GetStateProvinceByAddressAsync(address))?.Abbreviation, 200),
+                AdministrativeDistrictLevel2 = CommonHelper.EnsureMaximumLength(address.County, 200),
+                Country = string.Equals(country?.TwoLetterIsoCode, new RegionInfo(country?.TwoLetterIsoCode).TwoLetterISORegionName, StringComparison.InvariantCultureIgnoreCase)
                     ? country?.TwoLetterIsoCode : null,
-                firstName: CommonHelper.EnsureMaximumLength(address.FirstName, 300),
-                lastName: CommonHelper.EnsureMaximumLength(address.LastName, 300),
-                locality: CommonHelper.EnsureMaximumLength(address.City, 300),
-                postalCode: CommonHelper.EnsureMaximumLength(address.ZipPostalCode, 12)
-            );
+                FirstName = CommonHelper.EnsureMaximumLength(address.FirstName, 300),
+                LastName = CommonHelper.EnsureMaximumLength(address.LastName, 300),
+                Locality = CommonHelper.EnsureMaximumLength(address.City, 300),
+                PostalCode = CommonHelper.EnsureMaximumLength(address.ZipPostalCode, 12)
+            };
         }
 
         var customerBillingAddress = await _customerService.GetCustomerBillingAddressAsync(customer);
@@ -231,7 +231,7 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         //the amount of money, in the smallest denomination of the currency indicated by currency. For example, when currency is USD, amount is in cents;
         //most currencies consist of 100 units of smaller denomination, so we multiply the total by 100
         var orderTotal = (int)(paymentRequest.OrderTotal * 100);
-        var amountMoney = new SquareModel.Money(orderTotal, currency.CurrencyCode);
+        var amountMoney = new SquareModel.Money { Amount = orderTotal, Currency = currency.CurrencyCode };
 
         //try to get the verification token if exists
         var tokenKey = await _localizationService.GetResourceAsync("Plugins.Payments.Square.Fields.Token.Key");
@@ -245,24 +245,26 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         if (location == null)
             throw new NopException("Location is a required parameter for payment requests");
 
-        var paymentRequestBuilder = new SquareModel.CreatePaymentRequest.Builder
-            (
-                //Payment source, regardless of whether it is a card on file or a nonce.
-                //this parameter will be initialized below
-                sourceId: null,
-                idempotencyKey: Guid.NewGuid().ToString()
-            )
-            .AmountMoney(amountMoney)
-            .Autocomplete(_squarePaymentSettings.TransactionMode == TransactionMode.Charge)
-            .BillingAddress(billingAddress)
-            .ShippingAddress(shippingAddress)
-            .BuyerEmailAddress(email)
-            .Note(string.Format(SquarePaymentDefaults.PaymentNote, paymentRequest.OrderGuid))
-            .ReferenceId(paymentRequest.OrderGuid.ToString())
-            .VerificationToken(token?.ToString())
-            .LocationId(location.Id);
-
+        var idempotencyKey = Guid.NewGuid().ToString();
         var integrationId = _squarePaymentSettings.UseSandbox ? null : SquarePaymentDefaults.IntegrationId;
+
+        //the payment source (a card on file or a nonce) is known only in the branches below
+        SquareModel.CreatePaymentRequest createPaymentRequest(string sourceId, string customerId = null) =>
+            new SquareModel.CreatePaymentRequest
+            {
+                SourceId = sourceId,
+                IdempotencyKey = idempotencyKey,
+                AmountMoney = amountMoney,
+                Autocomplete = _squarePaymentSettings.TransactionMode == TransactionMode.Charge,
+                CustomerId = customerId,
+                BillingAddress = billingAddress,
+                ShippingAddress = shippingAddress,
+                BuyerEmailAddress = email,
+                Note = string.Format(SquarePaymentDefaults.PaymentNote, paymentRequest.OrderGuid),
+                ReferenceId = paymentRequest.OrderGuid.ToString(),
+                VerificationToken = token?.ToString(),
+                LocationId = location.Id
+            }.WithIntegrationId(integrationId);
 
         //try to get previously stored card details
         var storedCardKey = await _localizationService.GetResourceAsync("Plugins.Payments.Square.Fields.StoredCard.Key");
@@ -275,11 +277,7 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
                 throw new NopException("Failed to retrieve customer");
 
             //set 'card on file'
-            return paymentRequestBuilder
-                .CustomerId(squareCustomer.Id)
-                .SourceId(storedCardId?.ToString())
-                .Build()
-                .ToExtendedRequest(integrationId);
+            return createPaymentRequest(storedCardId?.ToString(), squareCustomer.Id);
         }
 
         //or try to get the card nonce
@@ -307,26 +305,24 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
                 if (squareCustomer == null)
                 {
                     //try to create the new one for current store, if not exists
-                    var customerRequestBuilder = new SquareModel.CreateCustomerRequest.Builder()
-                        .EmailAddress(customer.Email)
-                        .Nickname(CommonHelper.EnsureMaximumLength(customer.Username, 100))
-                        .GivenName(CommonHelper.EnsureMaximumLength(customer.FirstName, 300))
-                        .FamilyName(CommonHelper.EnsureMaximumLength(customer.LastName, 300))
-                        .PhoneNumber(customer.Phone)
-                        .CompanyName(CommonHelper.EnsureMaximumLength(customer.Company, 500))
-                        .ReferenceId(customer.CustomerGuid.ToString());
+                    var customerRequest = new SquareModel.CreateCustomerRequest
+                    {
+                        EmailAddress = customer.Email,
+                        Nickname = CommonHelper.EnsureMaximumLength(customer.Username, 100),
+                        GivenName = CommonHelper.EnsureMaximumLength(customer.FirstName, 300),
+                        FamilyName = CommonHelper.EnsureMaximumLength(customer.LastName, 300),
+                        PhoneNumber = customer.Phone,
+                        CompanyName = CommonHelper.EnsureMaximumLength(customer.Company, 500),
+                        ReferenceId = customer.CustomerGuid.ToString()
+                    };
 
-                    squareCustomer = await _squarePaymentManager.CreateCustomerAsync(customerRequestBuilder.Build(), storeId);
+                    squareCustomer = await _squarePaymentManager.CreateCustomerAsync(customerRequest, storeId);
                     if (squareCustomer == null)
                         throw new NopException("Failed to create customer. Error details in the log");
 
                     //save customer identifier as generic attribute
                     await _genericAttributeService.SaveAttributeAsync(customer, SquarePaymentDefaults.CustomerIdAttribute, squareCustomer.Id);
                 }
-
-                //create request parameters to create the new card
-                var cardRequestBuilder = new SquareModel.Card.Builder()
-                    .CustomerId(squareCustomer.Id);
 
                 var cardBillingAddress = billingAddress ?? shippingAddress;
 
@@ -337,22 +333,25 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
                     //remove the value from payment custom values, since it is no longer needed
                     paymentRequest.CustomValues.Remove(postalCodeKey);
 
-                    cardBillingAddress ??= new SquareModel.Address();
-                    cardBillingAddress = cardBillingAddress
-                        .ToBuilder()
-                        .PostalCode(CommonHelper.EnsureMaximumLength(postalCode.ToString(), 12))
-                        .Build();
+                    cardBillingAddress = (cardBillingAddress ?? new SquareModel.Address()) with
+                    {
+                        PostalCode = CommonHelper.EnsureMaximumLength(postalCode.ToString(), 12)
+                    };
                 }
 
-                cardRequestBuilder.BillingAddress(cardBillingAddress);
-
                 //try to create card for current store
-                var createCardRequestBuilder = new SquareModel.CreateCardRequest.Builder(
-                        idempotencyKey: Guid.NewGuid().ToString(),
-                        sourceId: cardNonce.ToString(),
-                        card: cardRequestBuilder.Build())
-                    .VerificationToken(token?.ToString());
-                var card = await _squarePaymentManager.CreateCustomerCardAsync(createCardRequestBuilder.Build(), storeId);
+                var createCardRequest = new SquareModel.CreateCardRequest
+                {
+                    IdempotencyKey = Guid.NewGuid().ToString(),
+                    SourceId = cardNonce.ToString(),
+                    Card = new SquareModel.Card
+                    {
+                        CustomerId = squareCustomer.Id,
+                        BillingAddress = cardBillingAddress
+                    },
+                    VerificationToken = token?.ToString()
+                };
+                var card = await _squarePaymentManager.CreateCustomerCardAsync(createCardRequest, storeId);
                 if (card == null)
                     throw new NopException("Failed to create card. Error details in the log");
 
@@ -361,11 +360,7 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
                     paymentRequest.CustomValues.Add(storedCardKey, card.Id);
 
                 //set 'card on file'
-                return paymentRequestBuilder
-                    .CustomerId(squareCustomer.Id)
-                    .SourceId(card.Id)
-                    .Build()
-                    .ToExtendedRequest(integrationId);
+                return createPaymentRequest(card.Id, squareCustomer.Id);
             }
             catch (Exception exception)
             {
@@ -378,10 +373,7 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
             throw new NopException("For recurring payments you need to save the card details");
 
         //set 'card nonce'
-        return paymentRequestBuilder
-            .SourceId(cardNonce.ToString())
-            .Build()
-            .ToExtendedRequest(integrationId);
+        return createPaymentRequest(cardNonce.ToString());
     }
 
     #endregion
@@ -487,18 +479,18 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         //the amount of money in the smallest denomination of the currency indicated by currency. For example, when currency is USD, amount is in cents;
         //most currencies consist of 100 units of smaller denomination, so we multiply the total by 100
         var orderTotal = (int)(refundPaymentRequest.AmountToRefund * 100);
-        var amountMoney = new SquareModel.Money(orderTotal, currency.CurrencyCode);
+        var amountMoney = new SquareModel.Money { Amount = orderTotal, Currency = currency.CurrencyCode };
 
         //first try to get the transaction for current store
         var storeId = (await _storeContext.GetCurrentStoreAsync()).Id;
         var transactionId = refundPaymentRequest.Order.CaptureTransactionId;
 
         var paymentRefundRequest = new SquareModel.RefundPaymentRequest
-        (
-            idempotencyKey: Guid.NewGuid().ToString(),
-            amountMoney: amountMoney,
-            paymentId: transactionId
-        );
+        {
+            IdempotencyKey = Guid.NewGuid().ToString(),
+            AmountMoney = amountMoney,
+            PaymentId = transactionId
+        };
 
         var (paymentRefund, paymentRefundError) = await _squarePaymentManager.RefundPaymentAsync(paymentRefundRequest, storeId);
         if (paymentRefund == null)
