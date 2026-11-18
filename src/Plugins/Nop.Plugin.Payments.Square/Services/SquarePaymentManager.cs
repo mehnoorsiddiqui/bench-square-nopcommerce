@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Net;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -116,6 +117,28 @@ public class SquarePaymentManager
     }
 
     /// <summary>
+    /// Logs a failed payment-workflow call, then tells apart the two ways it can fail. When Square answered and
+    /// refused the request (a decline, an invalid value: a 4xx, or errors in the body), the error message is
+    /// returned, as before. When the call itself failed (no connection, a timeout, a server error, a body that
+    /// could not be read), a <see cref="SquareServiceException"/> carrying the original exception is thrown, so
+    /// the caller can see the failure was Square's rather than the request's.
+    /// </summary>
+    /// <param name="exception">The exception the call threw</param>
+    /// <returns>The asynchronous task whose result contains the error message of a refused request</returns>
+    private async Task<string> RefusalOrThrowAsync(Exception exception)
+    {
+        var errorMessage = await CatchExceptionAsync(exception);
+
+        var refusedBySquare = exception is NopException
+            || exception is ApiException { StatusCode: >= HttpStatusCode.BadRequest and < HttpStatusCode.InternalServerError }
+                and not ResponseDeserializationException;
+        if (!refusedBySquare)
+            throw new SquareServiceException(errorMessage, exception);
+
+        return errorMessage;
+    }
+
+    /// <summary>
     /// Reads the "errors[].detail" of a Square error body; null when the body carries none
     /// </summary>
     private static string ReadErrorDetails(ApiException<RawError> exception)
@@ -151,7 +174,9 @@ public class SquarePaymentManager
     /// Get selected active business locations
     /// </summary>
     /// <param name="storeId">Store identifier for which locations should be loaded</param>
-    /// <returns>The asynchronous task whose result contains the Location</returns>
+    /// <returns>The asynchronous task whose result contains the Location; null when no location is selected,
+    /// or the selected one is not active or cannot process cards</returns>
+    /// <exception cref="SquareServiceException">Square could not be reached or did not answer usably</exception>
     public async Task<Location> GetSelectedActiveLocationAsync(int storeId)
     {
         var client = await CreateSquareClientAsync(storeId);
@@ -160,37 +185,47 @@ public class SquarePaymentManager
         if (string.IsNullOrEmpty(settings.LocationId))
             return null;
 
+        Location location;
         try
         {
             var locationResponse = await client.Locations.RetrieveLocation(new RetrieveLocationRequest { LocationId = settings.LocationId }) ?? throw new NopException("No service response");
 
             ThrowErrorsIfExists(locationResponse.Errors);
 
-            var location = locationResponse.Location;
-            if (location == null
-                || location.Status != SquarePaymentDefaults.Status.LOCATION_ACTIVE
-                || (!location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? true))
-                throw new NopException("There are no selected active location for the account");
-
-            return location;
+            location = locationResponse.Location;
         }
         catch (Exception exception)
         {
-            await CatchExceptionAsync(exception);
+            //a failed call is not "no location": report it, so the caller can tell the two apart
+            throw new SquareServiceException(await CatchExceptionAsync(exception), exception);
+        }
+
+        //an inactive location is a valid answer from Square, not a failure
+        if (location == null
+            || location.Status != SquarePaymentDefaults.Status.LOCATION_ACTIVE
+            || (!location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? true))
+        {
+            await _logger.WarningAsync("Square payment warning: There are no selected active location for the account",
+                customer: await _workContext.GetCurrentCustomerAsync());
 
             return null;
         }
+
+        return location;
     }
 
     /// <summary>
     /// Gets active business locations
     /// </summary>
     /// <param name="storeId">Store identifier for which locations should be loaded</param>
-    /// <returns>The asynchronous task whose result contains the List of location</returns>
+    /// <returns>The asynchronous task whose result contains the List of location; empty when the account has no
+    /// active location that can process cards</returns>
+    /// <exception cref="SquareServiceException">Square could not be reached or did not answer usably</exception>
     public async Task<IList<Location>> GetActiveLocationsAsync(int storeId)
     {
         var client = await CreateSquareClientAsync(storeId);
 
+        IEnumerable<Location> locations;
         try
         {
             var listLocationsResponse = await client.Locations.ListLocations();
@@ -200,22 +235,26 @@ public class SquarePaymentManager
 
             ThrowErrorsIfExists(listLocationsResponse.Errors);
 
-            //filter active locations and locations that can process credit cards
-            var activeLocations = listLocationsResponse.Locations
-                ?.Where(location => location?.Status == SquarePaymentDefaults.Status.LOCATION_ACTIVE &&
-                    (location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? false))
-                .ToList();
-            if (!activeLocations?.Any() ?? true)
-                throw new NopException("There are no active locations for the account");
-
-            return activeLocations;
+            locations = listLocationsResponse.Locations;
         }
         catch (Exception exception)
         {
-            await CatchExceptionAsync(exception);
-
-            return new List<Location>();
+            //a failed call is not "no locations": report it, so the caller can tell the two apart
+            throw new SquareServiceException(await CatchExceptionAsync(exception), exception);
         }
+
+        //filter active locations and locations that can process credit cards
+        var activeLocations = locations
+            ?.Where(location => location?.Status == SquarePaymentDefaults.Status.LOCATION_ACTIVE &&
+                (location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? false))
+            .ToList() ?? new List<Location>();
+
+        //an account with no usable location is a valid answer from Square, not a failure
+        if (!activeLocations.Any())
+            await _logger.WarningAsync("Square payment warning: There are no active locations for the account",
+                customer: await _workContext.GetCurrentCustomerAsync());
+
+        return activeLocations;
     }
 
     /// <summary>
@@ -344,7 +383,7 @@ public class SquarePaymentManager
         }
         catch (Exception exception)
         {
-            return (null, await CatchExceptionAsync(exception));
+            return (null, await RefusalOrThrowAsync(exception));
         }
     }
 
@@ -373,7 +412,7 @@ public class SquarePaymentManager
         }
         catch (Exception exception)
         {
-            return (false, await CatchExceptionAsync(exception));
+            return (false, await RefusalOrThrowAsync(exception));
         }
     }
 
@@ -403,7 +442,7 @@ public class SquarePaymentManager
         }
         catch (Exception exception)
         {
-            return (false, await CatchExceptionAsync(exception));
+            return (false, await RefusalOrThrowAsync(exception));
         }
     }
 
@@ -432,7 +471,7 @@ public class SquarePaymentManager
         }
         catch (Exception exception)
         {
-            return (null, await CatchExceptionAsync(exception));
+            return (null, await RefusalOrThrowAsync(exception));
         }
     }
 
