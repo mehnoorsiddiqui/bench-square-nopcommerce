@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Net;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -111,6 +112,28 @@ public class SquarePaymentManager
         //every operation reports errors as a raw body (Case B); read Square's error details from it
         if (exception is ApiException<RawError> apiException)
             errorMessage = ReadErrorDetails(apiException) ?? errorMessage;
+
+        return errorMessage;
+    }
+
+    /// <summary>
+    /// Logs a failed payment-workflow call, then tells apart the two ways it can fail. When Square answered and
+    /// refused the request (a decline, an invalid value: a 4xx, or errors in the body), the error message is
+    /// returned, as before. When the call itself failed (no connection, a timeout, a server error, a body that
+    /// could not be read), a <see cref="SquareServiceException"/> carrying the original exception is thrown, so
+    /// the caller can see the failure was Square's rather than the request's.
+    /// </summary>
+    /// <param name="exception">The exception the call threw</param>
+    /// <returns>The asynchronous task whose result contains the error message of a refused request</returns>
+    private async Task<string> RefusalOrThrowAsync(Exception exception)
+    {
+        var errorMessage = await CatchExceptionAsync(exception);
+
+        var refusedBySquare = exception is NopException
+            || exception is ApiException { StatusCode: >= HttpStatusCode.BadRequest and < HttpStatusCode.InternalServerError }
+                and not ResponseDeserializationException;
+        if (!refusedBySquare)
+            throw new SquareServiceException(errorMessage, exception);
 
         return errorMessage;
     }
@@ -360,7 +383,7 @@ public class SquarePaymentManager
         }
         catch (Exception exception)
         {
-            return (null, await CatchExceptionAsync(exception));
+            return (null, await RefusalOrThrowAsync(exception));
         }
     }
 
@@ -389,7 +412,7 @@ public class SquarePaymentManager
         }
         catch (Exception exception)
         {
-            return (false, await CatchExceptionAsync(exception));
+            return (false, await RefusalOrThrowAsync(exception));
         }
     }
 
@@ -419,7 +442,7 @@ public class SquarePaymentManager
         }
         catch (Exception exception)
         {
-            return (false, await CatchExceptionAsync(exception));
+            return (false, await RefusalOrThrowAsync(exception));
         }
     }
 
@@ -448,7 +471,7 @@ public class SquarePaymentManager
         }
         catch (Exception exception)
         {
-            return (null, await CatchExceptionAsync(exception));
+            return (null, await RefusalOrThrowAsync(exception));
         }
     }
 
