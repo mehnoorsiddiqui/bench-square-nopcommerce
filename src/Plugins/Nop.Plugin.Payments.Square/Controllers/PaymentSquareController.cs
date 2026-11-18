@@ -121,17 +121,25 @@ public class PaymentSquareController : BasePaymentController
         //prepare business locations, every payment a merchant processes is associated with one of these locations
         if (!string.IsNullOrEmpty(settings.AccessToken))
         {
-            model.Locations = (await _squarePaymentManager.GetActiveLocationsAsync(storeScope)).Select(location =>
+            try
             {
-                var name = location.BusinessName;
-                if (!location.Name.Equals(location.BusinessName))
-                    name = $"{name} ({location.Name})";
-                return new SelectListItem { Text = name, Value = location.Id };
-            }).ToList();
-            if (model.Locations.Any())
+                model.Locations = (await _squarePaymentManager.GetActiveLocationsAsync(storeScope)).Select(location =>
+                {
+                    var name = location.BusinessName;
+                    if (!location.Name.Equals(location.BusinessName))
+                        name = $"{name} ({location.Name})";
+                    return new SelectListItem { Text = name, Value = location.Id };
+                }).ToList();
+                if (model.Locations.Any())
+                {
+                    var selectLocationText = await _localizationService.GetResourceAsync("Plugins.Payments.Square.Fields.Location.Select");
+                    model.Locations.Insert(0, new SelectListItem { Text = selectLocationText, Value = "0" });
+                }
+            }
+            catch (SquareServiceException exception)
             {
-                var selectLocationText = await _localizationService.GetResourceAsync("Plugins.Payments.Square.Fields.Location.Select");
-                model.Locations.Insert(0, new SelectListItem { Text = selectLocationText, Value = "0" });
+                //Square could not be reached: say so, and still render the page with no locations to choose from
+                _notificationService.ErrorNotification($"Square locations could not be loaded: {exception.Message}");
             }
         }
 
