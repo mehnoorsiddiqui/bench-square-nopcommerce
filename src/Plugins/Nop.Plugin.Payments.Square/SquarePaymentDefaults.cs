@@ -104,11 +104,6 @@ public class SquarePaymentDefaults
         public const string LOCATION_ACTIVE = "ACTIVE";
 
         /// <summary>
-        /// Location capability "CREDIT_CARD_PROCESSING"
-        /// </summary>
-        public const string LOCATION_PROCESSING = "CREDIT_CARD_PROCESSING";
-
-        /// <summary>
         /// Refund status "PENDING"
         /// </summary>
         public const string REFUND_PENDING = "PENDING";
