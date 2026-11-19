@@ -112,6 +112,22 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
     }
 
     /// <summary>
+    /// Gets the Square currency for the store currency
+    /// </summary>
+    /// <param name="currency">Currency</param>
+    /// <returns>Square currency</returns>
+    /// <exception cref="NopException">Square does not list the currency</exception>
+    private static SquareModel.Enums.Currency GetSquareCurrency(Currency currency)
+    {
+        //some ISO 4217 codes that pass CheckSupportCurrency are not in Square's list (e.g. BYN, MRU, STN, VES);
+        //refuse them rather than charge or refund in some other currency
+        if (!SquareModel.Enums.Currency.TryGetKnownValue(currency.CurrencyCode.ToUpperInvariant(), out var squareCurrency))
+            throw new NopException($"The {currency.CurrencyCode} currency is not supported by the Square");
+
+        return squareCurrency;
+    }
+
+    /// <summary>
     /// Gets a payment status by tender card details status
     /// </summary>
     /// <param name="status">Tender card details status</param>
@@ -202,14 +218,18 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
 
             var country = await _countryService.GetCountryByAddressAsync(address);
 
+            //leave the country out when Square does not list it (e.g. XK), as for a code that is not a valid region
+            SquareModel.Enums.Country squareCountry = null;
+            if (string.Equals(country?.TwoLetterIsoCode, new RegionInfo(country?.TwoLetterIsoCode).TwoLetterISORegionName, StringComparison.InvariantCultureIgnoreCase))
+                SquareModel.Enums.Country.TryGetKnownValue(country.TwoLetterIsoCode.ToUpperInvariant(), out squareCountry);
+
             return new SquareModel.Address
             {
                 AddressLine1 = CommonHelper.EnsureMaximumLength(address.Address1, 500),
                 AddressLine2 = CommonHelper.EnsureMaximumLength(address.Address2, 500),
                 AdministrativeDistrictLevel1 = CommonHelper.EnsureMaximumLength((await _stateProvinceService.GetStateProvinceByAddressAsync(address))?.Abbreviation, 200),
                 AdministrativeDistrictLevel2 = CommonHelper.EnsureMaximumLength(address.County, 200),
-                Country = string.Equals(country?.TwoLetterIsoCode, new RegionInfo(country?.TwoLetterIsoCode).TwoLetterISORegionName, StringComparison.InvariantCultureIgnoreCase)
-                    ? country?.TwoLetterIsoCode : null,
+                Country = squareCountry,
                 FirstName = CommonHelper.EnsureMaximumLength(address.FirstName, 300),
                 LastName = CommonHelper.EnsureMaximumLength(address.LastName, 300),
                 Locality = CommonHelper.EnsureMaximumLength(address.City, 300),
@@ -231,7 +251,7 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         //the amount of money, in the smallest denomination of the currency indicated by currency. For example, when currency is USD, amount is in cents;
         //most currencies consist of 100 units of smaller denomination, so we multiply the total by 100
         var orderTotal = (int)(paymentRequest.OrderTotal * 100);
-        var amountMoney = new SquareModel.Money { Amount = orderTotal, Currency = currency.CurrencyCode };
+        var amountMoney = new SquareModel.Money { Amount = orderTotal, Currency = GetSquareCurrency(currency) };
 
         //try to get the verification token if exists
         var tokenKey = await _localizationService.GetResourceAsync("Plugins.Payments.Square.Fields.Token.Key");
@@ -479,7 +499,7 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         //the amount of money in the smallest denomination of the currency indicated by currency. For example, when currency is USD, amount is in cents;
         //most currencies consist of 100 units of smaller denomination, so we multiply the total by 100
         var orderTotal = (int)(refundPaymentRequest.AmountToRefund * 100);
-        var amountMoney = new SquareModel.Money { Amount = orderTotal, Currency = currency.CurrencyCode };
+        var amountMoney = new SquareModel.Money { Amount = orderTotal, Currency = GetSquareCurrency(currency) };
 
         //first try to get the transaction for current store
         var storeId = (await _storeContext.GetCurrentStoreAsync()).Id;

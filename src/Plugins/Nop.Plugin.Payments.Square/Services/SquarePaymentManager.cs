@@ -73,7 +73,7 @@ public class SquarePaymentManager
         var options = new SquareClientOptions
         {
             BearerAuth = settings.AccessToken,
-            Environment = settings.UseSandbox ? ServerEnvironment.Environment2 : ServerEnvironment.Production,
+            Environment = settings.UseSandbox ? ServerEnvironment.Sandbox : ServerEnvironment.Production,
             Retry = RetryOptions.Default() with { Timeout = SquarePaymentDefaults.RequestTimeout },
             //set explicitly: an unset factory lets the SQUARE_LOG variable log request bodies (card nonces, addresses)
             Logging = new LoggingOptions { LoggerFactory = NullLoggerFactory.Instance },
@@ -203,7 +203,7 @@ public class SquarePaymentManager
         //an inactive location is a valid answer from Square, not a failure
         if (location == null
             || location.Status != SquarePaymentDefaults.Status.LOCATION_ACTIVE
-            || (!location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? true))
+            || (!location.Capabilities?.Any(capability => capability?.Value == SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? true))
         {
             await _logger.WarningAsync("Square payment warning: There are no selected active location for the account",
                 customer: await _workContext.GetCurrentCustomerAsync());
@@ -246,7 +246,7 @@ public class SquarePaymentManager
         //filter active locations and locations that can process credit cards
         var activeLocations = locations
             ?.Where(location => location?.Status == SquarePaymentDefaults.Status.LOCATION_ACTIVE &&
-                (location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? false))
+                (location.Capabilities?.Any(capability => capability?.Value == SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? false))
             .ToList() ?? new List<Location>();
 
         //an account with no usable location is a valid answer from Square, not a failure
