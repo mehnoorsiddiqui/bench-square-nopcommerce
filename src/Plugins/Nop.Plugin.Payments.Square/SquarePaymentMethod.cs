@@ -50,6 +50,8 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
     private readonly SquarePaymentManager _squarePaymentManager;
     private readonly SquarePaymentSettings _squarePaymentSettings;
     private readonly IStoreContext _storeContext;
+    private readonly LegacyTransactionService _legacyTransactionService;
+    private readonly SquareCustomerLinkService _squareCustomerLinkService;
 
     #endregion
 
@@ -70,7 +72,9 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         IWebHelper webHelper,
         SquarePaymentManager squarePaymentManager,
         SquarePaymentSettings squarePaymentSettings,
-        IStoreContext storeContext)
+        IStoreContext storeContext,
+        LegacyTransactionService legacyTransactionService,
+        SquareCustomerLinkService squareCustomerLinkService)
     {
         _currencySettings = currencySettings;
         _countryService = countryService;
@@ -88,6 +92,8 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         _squarePaymentManager = squarePaymentManager;
         _squarePaymentSettings = squarePaymentSettings;
         _storeContext = storeContext;
+        _legacyTransactionService = legacyTransactionService;
+        _squareCustomerLinkService = squareCustomerLinkService;
     }
 
     #endregion
@@ -322,6 +328,16 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
 
                     //save customer identifier as generic attribute
                     await _genericAttributeService.SaveAttributeAsync(customer, SquarePaymentDefaults.CustomerIdAttribute, squareCustomer.Id);
+
+                    //and link the Square customer back to this customer, so Square-side tools can find the store account
+                    try
+                    {
+                        await _squareCustomerLinkService.LinkAsync(squareCustomer.Id, customer.CustomerGuid, storeId);
+                    }
+                    catch (Exception linkException)
+                    {
+                        await _logger.WarningAsync($"Square payment warning: the Square customer could not be linked. {linkException.Message}", linkException, customer);
+                    }
                 }
 
                 var cardBillingAddress = billingAddress ?? shippingAddress;
@@ -444,6 +460,19 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         //capture transaction for current store
         var storeId = (await _storeContext.GetCurrentStoreAsync()).Id;
         var transactionId = capturePaymentRequest.Order.AuthorizationTransactionId;
+
+        //orders paid with the legacy Transactions API are captured there
+        if (LegacyTransactionReference.TryParse(transactionId, out var legacyTransaction))
+        {
+            await _legacyTransactionService.CaptureAsync(legacyTransaction, storeId);
+
+            return new CapturePaymentResult
+            {
+                NewPaymentStatus = PaymentStatus.Paid,
+                CaptureTransactionId = transactionId
+            };
+        }
+
         var completePaymentRequest = new SquareModel.CompletePaymentRequest();
         var (successfullyCompleted, error) = await _squarePaymentManager.CompletePaymentAsync(transactionId, completePaymentRequest, storeId);
         if (!successfullyCompleted)
@@ -484,6 +513,28 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         //first try to get the transaction for current store
         var storeId = (await _storeContext.GetCurrentStoreAsync()).Id;
         var transactionId = refundPaymentRequest.Order.CaptureTransactionId;
+
+        //orders paid with the legacy Transactions API are refunded against their tenders, never beyond what is left
+        if (LegacyTransactionReference.TryParse(transactionId, out var legacyTransaction))
+        {
+            string legacyRefundStatus;
+            try
+            {
+                legacyRefundStatus = await _legacyTransactionService.RefundAsync(legacyTransaction, orderTotal, currency.CurrencyCode, storeId);
+            }
+            catch (NopException exception)
+            {
+                return new RefundPaymentResult { Errors = new[] { exception.Message }.ToList() };
+            }
+
+            if (legacyRefundStatus is not (SquarePaymentDefaults.Status.REFUND_COMPLETED or "APPROVED"))
+                return new RefundPaymentResult { Errors = new[] { $"Refund is {legacyRefundStatus}" }.ToList() };
+
+            return new RefundPaymentResult
+            {
+                NewPaymentStatus = refundPaymentRequest.IsPartialRefund ? PaymentStatus.PartiallyRefunded : PaymentStatus.Refunded
+            };
+        }
 
         var paymentRefundRequest = new SquareModel.RefundPaymentRequest
         {
@@ -534,6 +585,15 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         //void transaction for current store
         var storeId = (await _storeContext.GetCurrentStoreAsync()).Id;
         var transactionId = voidPaymentRequest.Order.AuthorizationTransactionId;
+
+        //orders paid with the legacy Transactions API are voided there
+        if (LegacyTransactionReference.TryParse(transactionId, out var legacyTransaction))
+        {
+            await _legacyTransactionService.VoidAsync(legacyTransaction, storeId);
+
+            return new VoidPaymentResult { NewPaymentStatus = PaymentStatus.Voided };
+        }
+
         var (successfullyCanceled, error) = await _squarePaymentManager.CancelPaymentAsync(transactionId, storeId);
         if (!successfullyCanceled)
             throw new NopException(error);
@@ -720,7 +780,13 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
             ["Plugins.Payments.Square.RenewAccessToken.Success"] = "Square payment info. The access token was successfully renewed",
             ["Plugins.Payments.Square.RevokeAccessTokens"] = "Revoke access tokens",
             ["Plugins.Payments.Square.RevokeAccessTokens.Error"] = "An error occurred while revoking access tokens",
-            ["Plugins.Payments.Square.RevokeAccessTokens.Success"] = "All access tokens were successfully revoked"
+            ["Plugins.Payments.Square.RevokeAccessTokens.Success"] = "All access tokens were successfully revoked",
+            ["Plugins.Payments.Square.SavedCards"] = "Saved cards",
+            ["Plugins.Payments.Square.SavedCards.Empty"] = "You have no saved cards",
+            ["Plugins.Payments.Square.SavedCards.Expires"] = "Expires {0:00}/{1}",
+            ["Plugins.Payments.Square.SavedCards.Remove"] = "Remove",
+            ["Plugins.Payments.Square.SavedCards.Removed"] = "The card was removed",
+            ["Plugins.Payments.Square.SavedCards.Error"] = "Your saved cards could not be loaded. Please try again later"
         });
 
         await base.InstallAsync();

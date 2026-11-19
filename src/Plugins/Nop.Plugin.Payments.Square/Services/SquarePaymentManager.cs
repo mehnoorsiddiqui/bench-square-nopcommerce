@@ -2,22 +2,17 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.WebUtilities;
-using Microsoft.Extensions.Logging.Abstractions;
 using Nop.Core;
 using Nop.Services.Configuration;
 using Nop.Services.Logging;
-using Square;
-using Square.Core.Configuration;
 using Square.Core.ErrorResponse;
 using Square.Core.Exceptions;
-using Square.Core.Hooks;
 using Square.Models;
 using Square.Requests.Cards;
 using Square.Requests.Customers;
 using Square.Requests.Locations;
 using Square.Requests.Payments;
 using Square.Requests.Refunds;
-using Square.Servers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -28,7 +23,7 @@ public class SquarePaymentManager
 {
     #region Fields
 
-    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ISquareClientFactory _squareClientFactory;
     private readonly ILogger _logger;
     private readonly ISettingService _settingService;
     private readonly IWorkContext _workContext;
@@ -38,13 +33,13 @@ public class SquarePaymentManager
 
     #region Ctor
 
-    public SquarePaymentManager(IHttpClientFactory httpClientFactory,
+    public SquarePaymentManager(ISquareClientFactory squareClientFactory,
         ILogger logger,
         ISettingService settingService,
         IWorkContext workContext,
         SquareAuthorizationHttpClient squareAuthorizationHttpClient)
     {
-        _httpClientFactory = httpClientFactory;
+        _squareClientFactory = squareClientFactory;
         _logger = logger;
         _settingService = settingService;
         _workContext = workContext;
@@ -60,45 +55,14 @@ public class SquarePaymentManager
     /// </summary>
     /// <param name="storeId">Store identifier for which configuration should be loaded</param>
     /// <returns>The asynchronous task whose result contains the Square Client</returns>
-    private async Task<SquareClient> CreateSquareClientAsync(int storeId)
+    private Task<global::Square.SquareClient> CreateSquareClientAsync(int storeId)
     {
-        var settings = await _settingService.LoadSettingAsync<SquarePaymentSettings>(storeId);
-
-        //validate access token
-        if (settings.UseSandbox && string.IsNullOrEmpty(settings.AccessToken))
-            throw new NopException("Sandbox access token should not be empty");
-
-        //settings are per store and read on every call, so the client is built per call;
-        //the HttpClient comes from the factory (bounded attempts, store proxy settings)
-        var options = new SquareClientOptions
-        {
-            BearerAuth = settings.AccessToken,
-            Environment = settings.UseSandbox ? ServerEnvironment.Environment2 : ServerEnvironment.Production,
-            Retry = RetryOptions.Default() with { Timeout = SquarePaymentDefaults.RequestTimeout },
-            //set explicitly: an unset factory lets the SQUARE_LOG variable log request bodies (card nonces, addresses)
-            Logging = new LoggingOptions { LoggerFactory = NullLoggerFactory.Instance },
-            Hooks =
-            [
-                SdkHook.OnRequest((request, _) =>
-                {
-                    request.Headers.Remove("User-Agent");
-                    request.Headers.TryAddWithoutValidation("User-Agent", SquarePaymentDefaults.UserAgent);
-                })
-            ]
-        };
-
-        return new SquareClient(_httpClientFactory.CreateClient(SquarePaymentDefaults.SdkHttpClientName), options);
+        return _squareClientFactory.CreateAsync(storeId);
     }
 
     private void ThrowErrorsIfExists(IReadOnlyList<Error> errors)
     {
-        //check whether there are errors in the service response
-        if (!(errors?.Any() ?? false))
-            return;
-
-        var errorsMessage = string.Join(";", errors.Select(error => error.Detail));
-
-        throw new NopException($"There are errors in the service response. {errorsMessage}");
+        SquareResponse.ThrowIfErrors(errors);
     }
 
     private async Task<string> CatchExceptionAsync(Exception exception)
@@ -146,7 +110,7 @@ public class SquarePaymentManager
         try
         {
             var details = exception.Error.ReadAsJson<SquareErrorBody>()?.Errors?
-                .Select(error => error.Detail)
+                .Select(DescribeError)
                 .Where(detail => !string.IsNullOrEmpty(detail))
                 .ToList();
 
@@ -157,6 +121,22 @@ public class SquarePaymentManager
             //not JSON (a gateway or proxy page): keep the exception message, which names the call and status
             return null;
         }
+    }
+
+    /// <summary>
+    /// Describes a Square error for the customer: card declines get a plain message, anything else keeps Square's detail
+    /// </summary>
+    private static string DescribeError(Error error)
+    {
+        return error.Code switch
+        {
+            "CARD_DECLINED" or "GENERIC_DECLINE" => "The card was declined. Please use a different card.",
+            "INSUFFICIENT_FUNDS" => "The card has insufficient funds.",
+            "CVV_FAILURE" => "The card security code (CVV) is incorrect.",
+            "ADDRESS_VERIFICATION_FAILURE" => "The postal code does not match the card.",
+            "INVALID_EXPIRATION" or "CARD_EXPIRED" => "The card has expired or its expiration date is invalid.",
+            _ => error.Detail
+        };
     }
 
     /// <summary>

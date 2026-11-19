@@ -53,6 +53,26 @@ public class SquarePaymentDefaults
     public static string CustomerIdAttribute => "SquareCustomerId";
 
     /// <summary>
+    /// Key of the product attribute to store the Square catalog item identifier
+    /// </summary>
+    public static string CatalogItemIdAttribute => "SquareCatalogItemId";
+
+    /// <summary>
+    /// Key of the product attribute to store the Square catalog item variation identifier
+    /// </summary>
+    public static string CatalogVariationIdAttribute => "SquareCatalogVariationId";
+
+    /// <summary>
+    /// Key of the warehouse attribute to store the Square location identifier
+    /// </summary>
+    public static string WarehouseLocationIdAttribute => "SquareLocationId";
+
+    /// <summary>
+    /// Name of the route to the customer's saved cards page
+    /// </summary>
+    public static string SavedCardsRoute => "Plugin.Payments.Square.SavedCards";
+
+    /// <summary>
     /// Name of the route to the access token callback
     /// </summary>
     public static string AccessTokenRoute => "Plugin.Payments.Square.AccessToken";

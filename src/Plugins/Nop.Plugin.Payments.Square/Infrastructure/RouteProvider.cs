@@ -19,6 +19,11 @@ public class RouteProvider : IRouteProvider
         endpointRouteBuilder.MapControllerRoute(name: SquarePaymentDefaults.AccessTokenRoute,
             pattern: "Plugins/PaymentSquare/AccessToken/",
             defaults: new { controller = "PaymentSquare", action = "AccessTokenCallback" });
+
+        //add route for the customer's saved cards page
+        endpointRouteBuilder.MapControllerRoute(name: SquarePaymentDefaults.SavedCardsRoute,
+            pattern: "customer/square-cards",
+            defaults: new { controller = "PaymentSquare", action = "SavedCards" });
     }
 
     /// <summary>

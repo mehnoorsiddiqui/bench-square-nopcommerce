@@ -69,6 +69,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Nop.Plugin.Payments.AmazonP
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nop.Plugin.Payments.Square", "Plugins\Nop.Plugin.Payments.Square\Nop.Plugin.Payments.Square.csproj", "{BCCCC124-9D68-4909-B4D8-5592538B1E83}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nop.Plugin.Payments.Square.Tests", "Tests\Nop.Plugin.Payments.Square.Tests\Nop.Plugin.Payments.Square.Tests.csproj", "{09E5BB23-3FC1-478E-94C7-A54983834E35}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -523,6 +525,22 @@ Global
 		{BCCCC124-9D68-4909-B4D8-5592538B1E83}.Release|x86.Build.0 = Release|Any CPU
 		{BCCCC124-9D68-4909-B4D8-5592538B1E83}.Release|x64.ActiveCfg = Release|Any CPU
 		{BCCCC124-9D68-4909-B4D8-5592538B1E83}.Release|x64.Build.0 = Release|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Debug|Mixed Platforms.ActiveCfg = Debug|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Debug|Mixed Platforms.Build.0 = Debug|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Debug|x86.Build.0 = Debug|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Debug|x64.Build.0 = Debug|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Release|Any CPU.Build.0 = Release|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Release|Mixed Platforms.ActiveCfg = Release|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Release|Mixed Platforms.Build.0 = Release|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Release|x86.ActiveCfg = Release|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Release|x86.Build.0 = Release|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Release|x64.ActiveCfg = Release|Any CPU
+		{09E5BB23-3FC1-478E-94C7-A54983834E35}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -557,6 +575,7 @@ Global
 		{48003279-FC5E-43F4-B683-E28B34BAECEB} = {7881B112-7843-4542-B1F7-F99553FB9BB7}
 		{6C596948-C94E-40A8-81AE-F96D75E7624B} = {7881B112-7843-4542-B1F7-F99553FB9BB7}
 		{BCCCC124-9D68-4909-B4D8-5592538B1E83} = {7881B112-7843-4542-B1F7-F99553FB9BB7}
+		{09E5BB23-3FC1-478E-94C7-A54983834E35} = {E8FC6874-E230-468A-9685-4747354B92FF}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {EE72A8B2-332A-4175-9319-6726D36E9D25}
