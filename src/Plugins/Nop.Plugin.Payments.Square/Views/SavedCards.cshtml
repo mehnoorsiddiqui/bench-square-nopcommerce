@@ -1,0 +1,45 @@
+@model SavedCardsModel
+
+@{
+    Layout = "_ColumnsTwo";
+    NopHtml.AppendPageCssClassParts("html-account-page");
+}
+
+<div class="page account-page square-saved-cards-page">
+    <div class="page-title">
+        <h1>@T("Plugins.Payments.Square.SavedCards")</h1>
+    </div>
+    <div class="page-body">
+        @if (!string.IsNullOrEmpty(Model.Error))
+        {
+            <div class="message-error">@Model.Error</div>
+        }
+        else if (!Model.Cards.Any())
+        {
+            <div class="no-data">@T("Plugins.Payments.Square.SavedCards.Empty")</div>
+        }
+        else
+        {
+            <div class="table-wrapper">
+                <table class="data-table">
+                    <tbody>
+                        @foreach (var card in Model.Cards)
+                        {
+                            <tr>
+                                <td>@card.Brand @(card.CardType)</td>
+                                <td>@string.Format(T("Plugins.Payments.Square.Fields.StoredCard.Mask").Text, card.Last4)</td>
+                                <td>@string.Format(T("Plugins.Payments.Square.SavedCards.Expires").Text, card.ExpMonth, card.ExpYear)</td>
+                                <td>
+                                    <form asp-controller="PaymentSquare" asp-action="RemoveCard" method="post">
+                                        <input type="hidden" name="cardId" value="@card.Id" />
+                                        <button type="submit" class="button-2">@T("Plugins.Payments.Square.SavedCards.Remove")</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>

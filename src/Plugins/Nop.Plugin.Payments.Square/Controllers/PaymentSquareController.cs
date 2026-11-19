@@ -4,10 +4,14 @@ using Nop.Core;
 using Nop.Plugin.Payments.Square.Domain;
 using Nop.Plugin.Payments.Square.Models;
 using Nop.Plugin.Payments.Square.Services;
+using Nop.Services.Catalog;
+using Nop.Services.Common;
 using Nop.Services.Configuration;
+using Nop.Services.Customers;
 using Nop.Services.Localization;
 using Nop.Services.Messages;
 using Nop.Services.Security;
+using Nop.Services.Shipping;
 using Nop.Web.Framework;
 using Nop.Web.Framework.Controllers;
 using Nop.Web.Framework.Mvc.Filters;
@@ -25,6 +29,13 @@ public class PaymentSquareController : BasePaymentController
     private readonly ISettingService _settingService;
     private readonly IStoreContext _storeContext;
     private readonly SquarePaymentManager _squarePaymentManager;
+    private readonly ICustomerService _customerService;
+    private readonly IGenericAttributeService _genericAttributeService;
+    private readonly IProductService _productService;
+    private readonly IShippingService _shippingService;
+    private readonly IWorkContext _workContext;
+    private readonly SquareCardService _squareCardService;
+    private readonly SquareInventoryService _squareInventoryService;
 
     #endregion
 
@@ -35,7 +46,14 @@ public class PaymentSquareController : BasePaymentController
         IPermissionService permissionService,
         ISettingService settingService,
         IStoreContext storeContext,
-        SquarePaymentManager squarePaymentManager)
+        SquarePaymentManager squarePaymentManager,
+        ICustomerService customerService,
+        IGenericAttributeService genericAttributeService,
+        IProductService productService,
+        IShippingService shippingService,
+        IWorkContext workContext,
+        SquareCardService squareCardService,
+        SquareInventoryService squareInventoryService)
     {
         _localizationService = localizationService;
         _notificationService = notificationService;
@@ -43,6 +61,13 @@ public class PaymentSquareController : BasePaymentController
         _settingService = settingService;
         _storeContext = storeContext;
         _squarePaymentManager = squarePaymentManager;
+        _customerService = customerService;
+        _genericAttributeService = genericAttributeService;
+        _productService = productService;
+        _shippingService = shippingService;
+        _workContext = workContext;
+        _squareCardService = squareCardService;
+        _squareInventoryService = squareInventoryService;
     }
 
     #endregion
@@ -296,6 +321,98 @@ public class PaymentSquareController : BasePaymentController
         }
 
         return await Configure();
+    }
+
+    /// <summary>
+    /// Shows the cards the current customer saved on file
+    /// </summary>
+    public async Task<IActionResult> SavedCards()
+    {
+        var customer = await _workContext.GetCurrentCustomerAsync();
+        if (!await _customerService.IsRegisteredAsync(customer))
+            return Challenge();
+
+        var storeId = (await _storeContext.GetCurrentStoreAsync()).Id;
+        var squareCustomerId = await _genericAttributeService.GetAttributeAsync<string>(customer, SquarePaymentDefaults.CustomerIdAttribute);
+
+        var model = new SavedCardsModel();
+        try
+        {
+            model.Cards = await _squareCardService.GetSavedCardsAsync(squareCustomerId, storeId);
+        }
+        catch (Exception)
+        {
+            model.Error = await _localizationService.GetResourceAsync("Plugins.Payments.Square.SavedCards.Error");
+        }
+
+        return View("~/Plugins/Payments.Square/Views/SavedCards.cshtml", model);
+    }
+
+    /// <summary>
+    /// Removes a card the current customer saved on file
+    /// </summary>
+    [HttpPost]
+    public async Task<IActionResult> RemoveCard(string cardId)
+    {
+        var customer = await _workContext.GetCurrentCustomerAsync();
+        if (!await _customerService.IsRegisteredAsync(customer))
+            return Challenge();
+
+        var storeId = (await _storeContext.GetCurrentStoreAsync()).Id;
+        var squareCustomerId = await _genericAttributeService.GetAttributeAsync<string>(customer, SquarePaymentDefaults.CustomerIdAttribute);
+
+        try
+        {
+            await _squareCardService.DisableCardAsync(squareCustomerId, cardId, storeId);
+            _notificationService.SuccessNotification(await _localizationService.GetResourceAsync("Plugins.Payments.Square.SavedCards.Removed"));
+        }
+        catch (Exception exception)
+        {
+            _notificationService.ErrorNotification(exception.Message);
+        }
+
+        return RedirectToRoute(SquarePaymentDefaults.SavedCardsRoute);
+    }
+
+    /// <summary>
+    /// Moves Square stock of a product between the locations of two warehouses
+    /// </summary>
+    [HttpPost]
+    [AuthorizeAdmin]
+    [Area(AreaNames.ADMIN)]
+    public async Task<IActionResult> MoveStock(int productId, int fromWarehouseId, int toWarehouseId, int quantity)
+    {
+        if (!await _permissionService.AuthorizeAsync(StandardPermissionProvider.ManageProducts))
+            return AccessDeniedView();
+
+        var storeId = (await _storeContext.GetCurrentStoreAsync()).Id;
+        var product = await _productService.GetProductByIdAsync(productId);
+        var variationId = product == null ? null
+            : await _genericAttributeService.GetAttributeAsync<string>(product, SquarePaymentDefaults.CatalogVariationIdAttribute);
+        if (string.IsNullOrEmpty(variationId))
+            return Json(new { success = false, error = "The product is not published to Square" });
+
+        async Task<string> getLocationIdAsync(int warehouseId)
+        {
+            var warehouse = await _shippingService.GetWarehouseByIdAsync(warehouseId);
+            return warehouse == null ? null
+                : await _genericAttributeService.GetAttributeAsync<string>(warehouse, SquarePaymentDefaults.WarehouseLocationIdAttribute);
+        }
+
+        var fromLocationId = await getLocationIdAsync(fromWarehouseId);
+        var toLocationId = await getLocationIdAsync(toWarehouseId);
+        if (string.IsNullOrEmpty(fromLocationId) || string.IsNullOrEmpty(toLocationId))
+            return Json(new { success = false, error = "Both warehouses must be mapped to Square locations" });
+
+        try
+        {
+            var result = await _squareInventoryService.MoveStockAsync(variationId, fromLocationId, toLocationId, quantity, DateTime.UtcNow, storeId);
+            return Json(new { success = true, id = result.Id, completed = result.Completed });
+        }
+        catch (Exception exception)
+        {
+            return Json(new { success = false, error = exception.Message });
+        }
     }
 
     #endregion

@@ -19,7 +19,13 @@ public class NopStartup : INopStartup
     /// <param name="configuration">Configuration of the application</param>
     public void ConfigureServices(IServiceCollection services, IConfiguration configuration)
     {
+        services.AddScoped<ISquareClientFactory, SquareClientFactory>();
         services.AddScoped<SquarePaymentManager>();
+        services.AddScoped<SquareCardService>();
+        services.AddScoped<LegacyTransactionService>();
+        services.AddScoped<SquareInventoryService>();
+        services.AddScoped<SquareCatalogService>();
+        services.AddScoped<SquareCustomerLinkService>();
 
         //client to request Square authorization service
         services.AddHttpClient<SquareAuthorizationHttpClient>().WithProxy();

@@ -9,6 +9,7 @@ using Nop.Services.Common;
 using Nop.Services.Customers;
 using Nop.Services.Directory;
 using Nop.Services.Localization;
+using Nop.Services.Logging;
 using Nop.Services.Orders;
 
 namespace Nop.Plugin.Payments.Square.Components;
@@ -26,12 +27,13 @@ public class PaymentSquareViewComponent : ViewComponent
     private readonly ICustomerService _customerService;
     private readonly IGenericAttributeService _genericAttributeService;
     private readonly ILocalizationService _localizationService;
+    private readonly ILogger _logger;
     private readonly IOrderTotalCalculationService _orderTotalCalculationService;
     private readonly IShoppingCartService _shoppingCartService;
     private readonly IStateProvinceService _stateProvinceService;
     private readonly IStoreContext _storeContext;
     private readonly IWorkContext _workContext;
-    private readonly SquarePaymentManager _squarePaymentManager;
+    private readonly SquareCardService _squareCardService;
     private readonly SquarePaymentSettings _squarePaymentSettings;
 
     #endregion
@@ -44,12 +46,13 @@ public class PaymentSquareViewComponent : ViewComponent
         ICustomerService customerService,
         IGenericAttributeService genericAttributeService,
         ILocalizationService localizationService,
+        ILogger logger,
         IOrderTotalCalculationService orderTotalCalculationService,
         IShoppingCartService shoppingCartService,
         IStateProvinceService stateProvinceService,
         IStoreContext storeContext,
         IWorkContext workContext,
-        SquarePaymentManager squarePaymentManager,
+        SquareCardService squareCardService,
         SquarePaymentSettings squarePaymentSettings)
     {
         _currencySettings = currencySettings;
@@ -58,12 +61,13 @@ public class PaymentSquareViewComponent : ViewComponent
         _customerService = customerService;
         _genericAttributeService = genericAttributeService;
         _localizationService = localizationService;
+        _logger = logger;
         _orderTotalCalculationService = orderTotalCalculationService;
         _shoppingCartService = shoppingCartService;
         _stateProvinceService = stateProvinceService;
         _storeContext = storeContext;
         _workContext = workContext;
-        _squarePaymentManager = squarePaymentManager;
+        _squareCardService = squareCardService;
         _squarePaymentSettings = squarePaymentSettings;
     }
 
@@ -98,12 +102,27 @@ public class PaymentSquareViewComponent : ViewComponent
         var customerId = await _genericAttributeService
                 .GetAttributeAsync<string>(currentCustomer, SquarePaymentDefaults.CustomerIdAttribute)
             ?? string.Empty;
-        var customer = await _squarePaymentManager.GetCustomerAsync(customerId, storeId);
-        if (customer?.Cards != null)
+        IList<SavedCardInfo> savedCards;
+        try
+        {
+            savedCards = await _squareCardService.GetSavedCardsAsync(customerId, storeId);
+        }
+        catch (Exception exception)
+        {
+            //the checkout still works with a new card when the saved ones cannot be loaded
+            await _logger.ErrorAsync($"Square payment error: {exception.Message}.", exception, currentCustomer);
+            savedCards = new List<SavedCardInfo>();
+        }
+
+        if (savedCards.Any())
         {
             var cardNumberMask = await _localizationService.GetResourceAsync("Plugins.Payments.Square.Fields.StoredCard.Mask");
-            model.StoredCards = customer.Cards
-                .Select(card => new SelectListItem { Text = string.Format(cardNumberMask, card.Last4), Value = card.Id })
+            model.StoredCards = savedCards
+                .Select(card => new SelectListItem
+                {
+                    Text = $"{card.Brand} {string.Format(cardNumberMask, card.Last4)} ({card.ExpMonth:00}/{card.ExpYear % 100:00})",
+                    Value = card.Id
+                })
                 .ToList();
         }
 

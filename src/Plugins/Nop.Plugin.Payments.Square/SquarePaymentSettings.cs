@@ -62,4 +62,14 @@ public class SquarePaymentSettings : ISettings
     /// Gets or sets refresh token
     /// </summary>
     public string RefreshToken { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to publish products to the Square catalog
+    /// </summary>
+    public bool SyncCatalog { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to keep Square inventory in step with the store stock
+    /// </summary>
+    public bool SyncInventory { get; set; }
 }
