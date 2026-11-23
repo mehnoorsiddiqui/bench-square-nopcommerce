@@ -1,7 +1,7 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -21,6 +21,15 @@ public record SavedCardInfo(string Id, string Brand, string CardType, string Las
 /// </summary>
 public class SquareCardService
 {
+    #region Constants
+
+    /// <summary>
+    /// The most pages of saved cards read for one customer
+    /// </summary>
+    private const int MaxCardPages = 20;
+
+    #endregion
+
     #region Fields
 
     private readonly ISquareClientFactory _squareClientFactory;
@@ -40,25 +49,27 @@ public class SquareCardService
 
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
+        var cardBrand = card.CardBrand;
+        var brand = cardBrand switch
         {
-            "VISA" => "Visa",
-            "MASTERCARD" => "Mastercard",
-            "AMERICAN_EXPRESS" => "American Express",
-            "DISCOVER" => "Discover",
-            "DISCOVER_DINERS" => "Diners Club",
-            "JCB" => "JCB",
-            "CHINA_UNIONPAY" => "UnionPay",
-            "SQUARE_GIFT_CARD" => "Square Gift Card",
-            "INTERAC" => "Interac",
-            "EFTPOS" => "EFTPOS",
+            _ when cardBrand == CardBrand.Visa => "Visa",
+            _ when cardBrand == CardBrand.Mastercard => "Mastercard",
+            _ when cardBrand == CardBrand.AmericanExpress => "American Express",
+            _ when cardBrand == CardBrand.Discover => "Discover",
+            _ when cardBrand == CardBrand.DiscoverDiners => "Diners Club",
+            _ when cardBrand == CardBrand.Jcb => "JCB",
+            _ when cardBrand == CardBrand.ChinaUnionpay => "UnionPay",
+            _ when cardBrand == CardBrand.SquareGiftCard => "Square Gift Card",
+            _ when cardBrand == CardBrand.Interac => "Interac",
+            _ when cardBrand == CardBrand.Eftpos => "EFTPOS",
             _ => "Card"
         };
 
-        var cardType = card.CardType switch
+        var type = card.CardType;
+        var cardType = type switch
         {
-            "CREDIT" => "Credit",
-            "DEBIT" => "Debit",
+            _ when type == CardType.Credit => "Credit",
+            _ when type == CardType.Debit => "Debit",
             _ => null
         };
 
@@ -81,15 +92,29 @@ public class SquareCardService
             return new List<SavedCardInfo>();
 
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+        //the customer no longer carries its cards, so list them (one page at a time, until Square has no more)
+        var cards = new List<Card>();
+        string cursor = null;
+        for (var page = 0; page < MaxCardPages; page++)
+        {
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        return (response.Customer?.Cards ?? [])
-            .Where(card => card.Enabled != false)
-            .Select(ToSavedCard)
-            .ToList();
+            SquareResponse.ThrowIfErrors(response.Errors);
+
+            cards.AddRange(response.Cards ?? []);
+
+            cursor = response.Cursor;
+            if (string.IsNullOrEmpty(cursor))
+                return cards
+                    .Where(card => card.Enabled != false)
+                    .Select(ToSavedCard)
+                    .ToList();
+        }
+
+        //never show a partial list as the complete one: a customer cannot remove or choose a card that was cut off
+        throw new NopException($"The customer has more than {MaxCardPages} pages of saved cards");
     }
 
     /// <summary>

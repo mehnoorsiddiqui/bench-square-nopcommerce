@@ -1,5 +1,8 @@
+using System.Security.Cryptography;
+using System.Text;
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Catalog;
 
 namespace Nop.Plugin.Payments.Square.Services;
@@ -35,6 +38,15 @@ public record CatalogSyncResult(string ItemId, string VariationId);
 /// </summary>
 public class SquareCatalogService
 {
+    #region Constants
+
+    /// <summary>
+    /// The longest idempotency key Square accepts for a catalog update
+    /// </summary>
+    private const int MaxIdempotencyKeyLength = 128;
+
+    #endregion
+
     #region Fields
 
     private readonly ISquareClientFactory _squareClientFactory;
@@ -54,13 +66,18 @@ public class SquareCatalogService
 
     /// <summary>
     /// Builds the idempotency key of a product update: retrying the same update reuses the key,
-    /// a later update of the product gets a new one
+    /// a later update of the product gets a new one. Square accepts at most 128 characters, so a longer key
+    /// is replaced by a hash of it
     /// </summary>
     /// <param name="product">Product</param>
     /// <returns>Idempotency key</returns>
     public static string BuildIdempotencyKey(CatalogProductInfo product)
     {
-        return $"nop:{product.StoreName}:{product.ProductId}:{product.Sku}:{product.VariationName}:{product.UpdatedOnUtc:yyyyMMddHHmmssfff}";
+        var key = $"nop:{product.StoreName}:{product.ProductId}:{product.Sku}:{product.VariationName}:{product.UpdatedOnUtc:yyyyMMddHHmmssfff}";
+        if (key.Length <= MaxIdempotencyKeyLength)
+            return key;
+
+        return $"nop:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))}";
     }
 
     /// <summary>
@@ -77,6 +94,9 @@ public class SquareCatalogService
         var itemId = product.ItemId ?? $"#item-{product.ProductId}";
         var variationId = product.VariationId ?? $"#variation-{product.ProductId}";
 
+        if (!Currency.TryGetKnownValue(product.Currency, out var currency))
+            throw new NopException($"The {product.Currency} currency is not supported by the Square");
+
         var client = await _squareClientFactory.CreateAsync(storeId);
         var response = await client.Catalog.UpsertCatalogObject(new UpsertCatalogObjectOperationRequest
         {
@@ -85,28 +105,25 @@ public class SquareCatalogService
                 IdempotencyKey = BuildIdempotencyKey(product),
                 Object = new CatalogObject
                 {
-                    Type = "ITEM",
+                    Type = CatalogObjectType.Item,
                     Id = itemId,
                     ItemData = new CatalogItem
                     {
                         Name = product.Name,
-                        ProductType = "REGULAR",
-                        AvailableOnline = product.Published,
-                        AvailableForPickup = product.Published && !product.IsDownload,
-                        AvailableElectronically = product.IsDownload,
+                        ProductType = CatalogItemProductType.Regular,
                         Variations =
                         [
                             new CatalogObject
                             {
-                                Type = "ITEM_VARIATION",
+                                Type = CatalogObjectType.ItemVariation,
                                 Id = variationId,
                                 ItemVariationData = new CatalogItemVariation
                                 {
                                     ItemId = itemId,
                                     Name = product.VariationName,
                                     Sku = product.Sku,
-                                    PricingType = "FIXED_PRICING",
-                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = product.Currency },
+                                    PricingType = CatalogPricingType.FixedPricing,
+                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = currency },
                                     TrackInventory = true
                                 }
                             }
