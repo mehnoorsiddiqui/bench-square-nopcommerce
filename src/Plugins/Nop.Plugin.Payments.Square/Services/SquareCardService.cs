@@ -1,7 +1,7 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -21,6 +21,15 @@ public record SavedCardInfo(string Id, string Brand, string CardType, string Las
 /// </summary>
 public class SquareCardService
 {
+    #region Constants
+
+    /// <summary>
+    /// Most pages of cards read for one customer (Square returns up to 25 cards per page)
+    /// </summary>
+    private const int MaxCardPages = 20;
+
+    #endregion
+
     #region Fields
 
     private readonly ISquareClientFactory _squareClientFactory;
@@ -40,27 +49,22 @@ public class SquareCardService
 
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
-        {
-            "VISA" => "Visa",
-            "MASTERCARD" => "Mastercard",
-            "AMERICAN_EXPRESS" => "American Express",
-            "DISCOVER" => "Discover",
-            "DISCOVER_DINERS" => "Diners Club",
-            "JCB" => "JCB",
-            "CHINA_UNIONPAY" => "UnionPay",
-            "SQUARE_GIFT_CARD" => "Square Gift Card",
-            "INTERAC" => "Interac",
-            "EFTPOS" => "EFTPOS",
-            _ => "Card"
-        };
+        //the SDK declares these as open enums: compare with the declared members, anything else is a plain "Card"
+        var brand = card.CardBrand == CardBrand.Visa ? "Visa"
+            : card.CardBrand == CardBrand.Mastercard ? "Mastercard"
+            : card.CardBrand == CardBrand.AmericanExpress ? "American Express"
+            : card.CardBrand == CardBrand.Discover ? "Discover"
+            : card.CardBrand == CardBrand.DiscoverDiners ? "Diners Club"
+            : card.CardBrand == CardBrand.Jcb ? "JCB"
+            : card.CardBrand == CardBrand.ChinaUnionpay ? "UnionPay"
+            : card.CardBrand == CardBrand.SquareGiftCard ? "Square Gift Card"
+            : card.CardBrand == CardBrand.Interac ? "Interac"
+            : card.CardBrand == CardBrand.Eftpos ? "EFTPOS"
+            : "Card";
 
-        var cardType = card.CardType switch
-        {
-            "CREDIT" => "Credit",
-            "DEBIT" => "Debit",
-            _ => null
-        };
+        var cardType = card.CardType == CardType.Credit ? "Credit"
+            : card.CardType == CardType.Debit ? "Debit"
+            : null;
 
         return new SavedCardInfo(card.Id, brand, cardType, card.Last4, card.ExpMonth, card.ExpYear);
     }
@@ -80,16 +84,36 @@ public class SquareCardService
         if (string.IsNullOrEmpty(squareCustomerId))
             return new List<SavedCardInfo>();
 
+        //a customer no longer carries its cards: they are listed (a page of up to 25 at a time) by customer
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
+        var cards = new List<Card>();
+        string cursor = null;
+        for (var page = 0; page < MaxCardPages; page++)
+        {
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+            SquareResponse.ThrowIfErrors(response.Errors);
 
-        return (response.Customer?.Cards ?? [])
-            .Where(card => card.Enabled != false)
-            .Select(ToSavedCard)
-            .ToList();
+            cards.AddRange(response.Cards ?? []);
+
+            //the last page carries no cursor
+            if (string.IsNullOrEmpty(response.Cursor))
+            {
+                return cards
+                    .Where(card => card.Enabled != false)
+                    .Select(ToSavedCard)
+                    .ToList();
+            }
+
+            if (response.Cursor == cursor)
+                break;
+
+            cursor = response.Cursor;
+        }
+
+        //a cut-short list would show an incomplete set of cards as if it were complete
+        throw new NopException("The saved cards of the customer could not be listed completely");
     }
 
     /// <summary>
