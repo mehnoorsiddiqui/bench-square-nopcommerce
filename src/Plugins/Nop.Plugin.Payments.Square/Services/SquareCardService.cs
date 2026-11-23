@@ -1,7 +1,7 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -21,6 +21,15 @@ public record SavedCardInfo(string Id, string Brand, string CardType, string Las
 /// </summary>
 public class SquareCardService
 {
+    #region Constants
+
+    /// <summary>
+    /// The most pages of cards read for one customer
+    /// </summary>
+    private const int MaxPages = 20;
+
+    #endregion
+
     #region Fields
 
     private readonly ISquareClientFactory _squareClientFactory;
@@ -38,29 +47,28 @@ public class SquareCardService
 
     #region Utilities
 
+    private static readonly IReadOnlyDictionary<CardBrand, string> BrandNames = new Dictionary<CardBrand, string>
+    {
+        [CardBrand.Visa] = "Visa",
+        [CardBrand.Mastercard] = "Mastercard",
+        [CardBrand.AmericanExpress] = "American Express",
+        [CardBrand.Discover] = "Discover",
+        [CardBrand.DiscoverDiners] = "Diners Club",
+        [CardBrand.Jcb] = "JCB",
+        [CardBrand.ChinaUnionpay] = "UnionPay",
+        [CardBrand.SquareGiftCard] = "Square Gift Card",
+        [CardBrand.Interac] = "Interac",
+        [CardBrand.Eftpos] = "EFTPOS"
+    };
+
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
-        {
-            "VISA" => "Visa",
-            "MASTERCARD" => "Mastercard",
-            "AMERICAN_EXPRESS" => "American Express",
-            "DISCOVER" => "Discover",
-            "DISCOVER_DINERS" => "Diners Club",
-            "JCB" => "JCB",
-            "CHINA_UNIONPAY" => "UnionPay",
-            "SQUARE_GIFT_CARD" => "Square Gift Card",
-            "INTERAC" => "Interac",
-            "EFTPOS" => "EFTPOS",
-            _ => "Card"
-        };
+        //a brand the plugin has no name for (including one Square added later) is shown as a plain card
+        var brand = card.CardBrand != null && BrandNames.TryGetValue(card.CardBrand, out var brandName) ? brandName : "Card";
 
-        var cardType = card.CardType switch
-        {
-            "CREDIT" => "Credit",
-            "DEBIT" => "Debit",
-            _ => null
-        };
+        var cardType = card.CardType == CardType.Credit ? "Credit"
+            : card.CardType == CardType.Debit ? "Debit"
+            : null;
 
         return new SavedCardInfo(card.Id, brand, cardType, card.Last4, card.ExpMonth, card.ExpYear);
     }
@@ -81,15 +89,33 @@ public class SquareCardService
             return new List<SavedCardInfo>();
 
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+        //Square lists the cards a page at a time (disabled cards are left out unless asked for);
+        //a list cut short would hide cards from the customer, so a result that does not end within the page cap is an error
+        var cards = new List<SavedCardInfo>();
+        string cursor = null;
+        for (var page = 0; page < MaxPages; page++)
+        {
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        return (response.Customer?.Cards ?? [])
-            .Where(card => card.Enabled != false)
-            .Select(ToSavedCard)
-            .ToList();
+            SquareResponse.ThrowIfErrors(response.Errors);
+
+            cards.AddRange((response.Cards ?? [])
+                .Where(card => card.Enabled != false)
+                .Select(ToSavedCard));
+
+            if (string.IsNullOrEmpty(response.Cursor))
+                return cards;
+
+            //a cursor that does not move would repeat the same page for ever
+            if (response.Cursor == cursor)
+                break;
+
+            cursor = response.Cursor;
+        }
+
+        throw new NopException($"The cards of Square customer {squareCustomerId} could not be listed completely");
     }
 
     /// <summary>
