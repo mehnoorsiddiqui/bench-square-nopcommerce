@@ -93,7 +93,8 @@ public class SquarePaymentManager
     {
         var errorMessage = await CatchExceptionAsync(exception);
 
-        var refusedBySquare = exception is NopException
+        //a credential the SDK refuses to send (not configured, or not accepted) is a refusal of the request, as a 401 is
+        var refusedBySquare = exception is NopException or AuthSchemeException
             || exception is ApiException { StatusCode: >= HttpStatusCode.BadRequest and < HttpStatusCode.InternalServerError }
                 and not ResponseDeserializationException;
         if (!refusedBySquare)
@@ -128,7 +129,8 @@ public class SquarePaymentManager
     /// </summary>
     private static string DescribeError(Error error)
     {
-        return error.Code switch
+        //the code is an SDK enum value: switch on its wire value (null when the body carries no code)
+        return error.Code?.Value switch
         {
             "CARD_DECLINED" or "GENERIC_DECLINE" => "The card was declined. Please use a different card.",
             "INSUFFICIENT_FUNDS" => "The card has insufficient funds.",
@@ -183,7 +185,7 @@ public class SquarePaymentManager
         //an inactive location is a valid answer from Square, not a failure
         if (location == null
             || location.Status != SquarePaymentDefaults.Status.LOCATION_ACTIVE
-            || (!location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? true))
+            || (!location.Capabilities?.Any(capability => capability == SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? true))
         {
             await _logger.WarningAsync("Square payment warning: There are no selected active location for the account",
                 customer: await _workContext.GetCurrentCustomerAsync());
@@ -226,7 +228,7 @@ public class SquarePaymentManager
         //filter active locations and locations that can process credit cards
         var activeLocations = locations
             ?.Where(location => location?.Status == SquarePaymentDefaults.Status.LOCATION_ACTIVE &&
-                (location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? false))
+                (location.Capabilities?.Any(capability => capability == SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? false))
             .ToList() ?? new List<Location>();
 
         //an account with no usable location is a valid answer from Square, not a failure

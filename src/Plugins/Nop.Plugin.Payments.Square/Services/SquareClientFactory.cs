@@ -59,11 +59,11 @@ public class SquareClientFactory : ISquareClientFactory
             throw new NopException("Sandbox access token should not be empty");
 
         //settings are per store and read on every call, so the client is built per call;
-        //the HttpClient comes from the factory (bounded attempts, store proxy settings)
+        //the HttpClient comes from the factory (store proxy settings; its attempts are bounded by the SDK's retry timeout)
         var options = new SquareClientOptions
         {
             BearerAuth = settings.AccessToken,
-            Environment = settings.UseSandbox ? ServerEnvironment.Environment2 : ServerEnvironment.Production,
+            Environment = settings.UseSandbox ? ServerEnvironment.Sandbox : ServerEnvironment.Production,
             Retry = RetryOptions.Default() with { Timeout = SquarePaymentDefaults.RequestTimeout },
             //set explicitly: an unset factory lets the SQUARE_LOG variable log request bodies (card nonces, addresses)
             Logging = new LoggingOptions { LoggerFactory = NullLoggerFactory.Instance },
