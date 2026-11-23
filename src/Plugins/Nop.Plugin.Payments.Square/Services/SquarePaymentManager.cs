@@ -128,7 +128,8 @@ public class SquarePaymentManager
     /// </summary>
     private static string DescribeError(Error error)
     {
-        return error.Code switch
+        //Code is an open enum: an undeclared wire value still arrives as is, so switch on its raw value
+        return error.Code?.Value switch
         {
             "CARD_DECLINED" or "GENERIC_DECLINE" => "The card was declined. Please use a different card.",
             "INSUFFICIENT_FUNDS" => "The card has insufficient funds.",
@@ -137,6 +138,14 @@ public class SquarePaymentManager
             "INVALID_EXPIRATION" or "CARD_EXPIRED" => "The card has expired or its expiration date is invalid.",
             _ => error.Detail
         };
+    }
+
+    /// <summary>
+    /// Whether the location can process credit cards
+    /// </summary>
+    private static bool HasCardProcessing(Location location)
+    {
+        return location.Capabilities?.Any(capability => capability == SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? false;
     }
 
     /// <summary>
@@ -183,7 +192,7 @@ public class SquarePaymentManager
         //an inactive location is a valid answer from Square, not a failure
         if (location == null
             || location.Status != SquarePaymentDefaults.Status.LOCATION_ACTIVE
-            || (!location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? true))
+            || !HasCardProcessing(location))
         {
             await _logger.WarningAsync("Square payment warning: There are no selected active location for the account",
                 customer: await _workContext.GetCurrentCustomerAsync());
@@ -226,7 +235,7 @@ public class SquarePaymentManager
         //filter active locations and locations that can process credit cards
         var activeLocations = locations
             ?.Where(location => location?.Status == SquarePaymentDefaults.Status.LOCATION_ACTIVE &&
-                (location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? false))
+                HasCardProcessing(location))
             .ToList() ?? new List<Location>();
 
         //an account with no usable location is a valid answer from Square, not a failure
