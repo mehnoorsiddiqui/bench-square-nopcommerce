@@ -30,9 +30,10 @@ public class NopStartup : INopStartup
         //client to request Square authorization service
         services.AddHttpClient<SquareAuthorizationHttpClient>().WithProxy();
 
-        //HttpClient for the Square SDK (bounded attempts, store proxy settings); taken from the factory
-        //for every SDK client, so the factory's handler rotation keeps connections and DNS fresh
-        services.AddHttpClient(SquarePaymentDefaults.SdkHttpClientName, client => client.Timeout = SquarePaymentDefaults.RequestTimeout)
+        //HttpClient for the Square SDK (store proxy settings); taken from the factory for every SDK client, so the
+        //factory's handler rotation keeps connections and DNS fresh. The SDK bounds every attempt itself
+        //(RetryOptions.Timeout), so the transport timeout is switched off rather than left to race it
+        services.AddHttpClient(SquarePaymentDefaults.SdkHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
             .WithProxy();
     }
 
