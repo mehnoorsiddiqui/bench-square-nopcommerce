@@ -1,7 +1,7 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -21,6 +21,15 @@ public record SavedCardInfo(string Id, string Brand, string CardType, string Las
 /// </summary>
 public class SquareCardService
 {
+    #region Constants
+
+    /// <summary>
+    /// Maximum number of pages of cards read for one customer (Square returns at most 25 cards a page)
+    /// </summary>
+    private const int MaxCardPages = 20;
+
+    #endregion
+
     #region Fields
 
     private readonly ISquareClientFactory _squareClientFactory;
@@ -38,31 +47,45 @@ public class SquareCardService
 
     #region Utilities
 
+    private static string GetBrandName(CardBrand brand)
+    {
+        if (brand == CardBrand.Visa)
+            return "Visa";
+        if (brand == CardBrand.Mastercard)
+            return "Mastercard";
+        if (brand == CardBrand.AmericanExpress)
+            return "American Express";
+        if (brand == CardBrand.Discover)
+            return "Discover";
+        if (brand == CardBrand.DiscoverDiners)
+            return "Diners Club";
+        if (brand == CardBrand.Jcb)
+            return "JCB";
+        if (brand == CardBrand.ChinaUnionpay)
+            return "UnionPay";
+        if (brand == CardBrand.SquareGiftCard)
+            return "Square Gift Card";
+        if (brand == CardBrand.Interac)
+            return "Interac";
+        if (brand == CardBrand.Eftpos)
+            return "EFTPOS";
+
+        return "Card";
+    }
+
+    private static string GetCardTypeName(CardType cardType)
+    {
+        if (cardType == CardType.Credit)
+            return "Credit";
+        if (cardType == CardType.Debit)
+            return "Debit";
+
+        return null;
+    }
+
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
-        {
-            "VISA" => "Visa",
-            "MASTERCARD" => "Mastercard",
-            "AMERICAN_EXPRESS" => "American Express",
-            "DISCOVER" => "Discover",
-            "DISCOVER_DINERS" => "Diners Club",
-            "JCB" => "JCB",
-            "CHINA_UNIONPAY" => "UnionPay",
-            "SQUARE_GIFT_CARD" => "Square Gift Card",
-            "INTERAC" => "Interac",
-            "EFTPOS" => "EFTPOS",
-            _ => "Card"
-        };
-
-        var cardType = card.CardType switch
-        {
-            "CREDIT" => "Credit",
-            "DEBIT" => "Debit",
-            _ => null
-        };
-
-        return new SavedCardInfo(card.Id, brand, cardType, card.Last4, card.ExpMonth, card.ExpYear);
+        return new SavedCardInfo(card.Id, GetBrandName(card.CardBrand), GetCardTypeName(card.CardType), card.Last4, card.ExpMonth, card.ExpYear);
     }
 
     #endregion
@@ -81,15 +104,33 @@ public class SquareCardService
             return new List<SavedCardInfo>();
 
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+        //the customer no longer carries its cards: they are listed by customer, a page (at most 25 cards) at a time
+        var cards = new List<Card>();
+        string cursor = null;
+        for (var page = 0; page < MaxCardPages; page++)
+        {
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        return (response.Customer?.Cards ?? [])
-            .Where(card => card.Enabled != false)
-            .Select(ToSavedCard)
-            .ToList();
+            SquareResponse.ThrowIfErrors(response.Errors);
+
+            cards.AddRange(response.Cards ?? []);
+
+            //the last page carries no cursor; an unchanged cursor would repeat the same page forever
+            if (string.IsNullOrEmpty(response.Cursor) || response.Cursor == cursor)
+            {
+                return cards
+                    .Where(card => card.Enabled != false)
+                    .Select(ToSavedCard)
+                    .ToList();
+            }
+
+            cursor = response.Cursor;
+        }
+
+        //a partial list would look complete to the customer, so it is reported as a failure
+        throw new NopException($"The customer has more than {MaxCardPages} pages of saved cards");
     }
 
     /// <summary>
