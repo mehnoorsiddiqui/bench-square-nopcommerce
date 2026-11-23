@@ -23,7 +23,7 @@ public class SquarePaymentDefaults
     public static string SdkHttpClientName => "SquareSdk";
 
     /// <summary>
-    /// Per-attempt timeout for Square SDK calls (bounds both the HttpClient and the SDK's retry attempt)
+    /// Per-attempt timeout for Square SDK calls (set on the SDK's retry options, which bound every attempt)
     /// </summary>
     public static TimeSpan RequestTimeout => TimeSpan.FromSeconds(30);
 
