@@ -1,7 +1,7 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -21,6 +21,15 @@ public record SavedCardInfo(string Id, string Brand, string CardType, string Las
 /// </summary>
 public class SquareCardService
 {
+    #region Constants
+
+    /// <summary>
+    /// Most pages of cards read for one customer
+    /// </summary>
+    private const int MaxCardPages = 20;
+
+    #endregion
+
     #region Fields
 
     private readonly ISquareClientFactory _squareClientFactory;
@@ -40,27 +49,24 @@ public class SquareCardService
 
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
-        {
-            "VISA" => "Visa",
-            "MASTERCARD" => "Mastercard",
-            "AMERICAN_EXPRESS" => "American Express",
-            "DISCOVER" => "Discover",
-            "DISCOVER_DINERS" => "Diners Club",
-            "JCB" => "JCB",
-            "CHINA_UNIONPAY" => "UnionPay",
-            "SQUARE_GIFT_CARD" => "Square Gift Card",
-            "INTERAC" => "Interac",
-            "EFTPOS" => "EFTPOS",
-            _ => "Card"
-        };
+        //brand and type are open enums: a value the SDK does not declare compares unequal to every constant
+        var cardBrand = card.CardBrand;
+        var brand = cardBrand == CardBrand.Visa ? "Visa"
+            : cardBrand == CardBrand.Mastercard ? "Mastercard"
+            : cardBrand == CardBrand.AmericanExpress ? "American Express"
+            : cardBrand == CardBrand.Discover ? "Discover"
+            : cardBrand == CardBrand.DiscoverDiners ? "Diners Club"
+            : cardBrand == CardBrand.Jcb ? "JCB"
+            : cardBrand == CardBrand.ChinaUnionpay ? "UnionPay"
+            : cardBrand == CardBrand.SquareGiftCard ? "Square Gift Card"
+            : cardBrand == CardBrand.Interac ? "Interac"
+            : cardBrand == CardBrand.Eftpos ? "EFTPOS"
+            : "Card";
 
-        var cardType = card.CardType switch
-        {
-            "CREDIT" => "Credit",
-            "DEBIT" => "Debit",
-            _ => null
-        };
+        var type = card.CardType;
+        var cardType = type == CardType.Credit ? "Credit"
+            : type == CardType.Debit ? "Debit"
+            : null;
 
         return new SavedCardInfo(card.Id, brand, cardType, card.Last4, card.ExpMonth, card.ExpYear);
     }
@@ -81,15 +87,29 @@ public class SquareCardService
             return new List<SavedCardInfo>();
 
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+        //the customer no longer lists its cards: they are read from the cards of the customer, page by page
+        var cards = new List<Card>();
+        string cursor = null;
+        for (var page = 0; page < MaxCardPages; page++)
+        {
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        return (response.Customer?.Cards ?? [])
-            .Where(card => card.Enabled != false)
-            .Select(ToSavedCard)
-            .ToList();
+            SquareResponse.ThrowIfErrors(response.Errors);
+
+            cards.AddRange(response.Cards ?? []);
+
+            cursor = response.Cursor;
+            if (string.IsNullOrEmpty(cursor))
+                return cards
+                    .Where(card => card.Enabled != false)
+                    .Select(ToSavedCard)
+                    .ToList();
+        }
+
+        //a partial list would hide cards the customer owns (and let a removal be refused wrongly), so it is not returned
+        throw new NopException($"The cards of customer {squareCustomerId} could not be read in {MaxCardPages} pages");
     }
 
     /// <summary>
