@@ -1,7 +1,7 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -21,6 +21,15 @@ public record SavedCardInfo(string Id, string Brand, string CardType, string Las
 /// </summary>
 public class SquareCardService
 {
+    #region Constants
+
+    /// <summary>
+    /// Most pages of cards read for one customer
+    /// </summary>
+    private const int MaxCardPages = 20;
+
+    #endregion
+
     #region Fields
 
     private readonly ISquareClientFactory _squareClientFactory;
@@ -42,23 +51,23 @@ public class SquareCardService
     {
         var brand = card.CardBrand switch
         {
-            "VISA" => "Visa",
-            "MASTERCARD" => "Mastercard",
-            "AMERICAN_EXPRESS" => "American Express",
-            "DISCOVER" => "Discover",
-            "DISCOVER_DINERS" => "Diners Club",
-            "JCB" => "JCB",
-            "CHINA_UNIONPAY" => "UnionPay",
-            "SQUARE_GIFT_CARD" => "Square Gift Card",
-            "INTERAC" => "Interac",
-            "EFTPOS" => "EFTPOS",
+            var value when value == CardBrand.Visa => "Visa",
+            var value when value == CardBrand.Mastercard => "Mastercard",
+            var value when value == CardBrand.AmericanExpress => "American Express",
+            var value when value == CardBrand.Discover => "Discover",
+            var value when value == CardBrand.DiscoverDiners => "Diners Club",
+            var value when value == CardBrand.Jcb => "JCB",
+            var value when value == CardBrand.ChinaUnionpay => "UnionPay",
+            var value when value == CardBrand.SquareGiftCard => "Square Gift Card",
+            var value when value == CardBrand.Interac => "Interac",
+            var value when value == CardBrand.Eftpos => "EFTPOS",
             _ => "Card"
         };
 
         var cardType = card.CardType switch
         {
-            "CREDIT" => "Credit",
-            "DEBIT" => "Debit",
+            var value when value == CardType.Credit => "Credit",
+            var value when value == CardType.Debit => "Debit",
             _ => null
         };
 
@@ -81,15 +90,37 @@ public class SquareCardService
             return new List<SavedCardInfo>();
 
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+        //the customer no longer embeds its cards; they are listed (enabled ones only, by default) page by page
+        var cards = new List<Card>();
+        var seenCursors = new HashSet<string>();
+        string cursor = null;
+        for (var page = 0; page < MaxCardPages; page++)
+        {
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        return (response.Customer?.Cards ?? [])
-            .Where(card => card.Enabled != false)
-            .Select(ToSavedCard)
-            .ToList();
+            SquareResponse.ThrowIfErrors(response.Errors);
+
+            cards.AddRange(response.Cards ?? []);
+
+            //the last page carries no cursor
+            cursor = response.Cursor;
+            if (string.IsNullOrEmpty(cursor))
+            {
+                return cards
+                    .Where(card => card.Enabled != false)
+                    .Select(ToSavedCard)
+                    .ToList();
+            }
+
+            //a cursor that does not advance would never end
+            if (!seenCursors.Add(cursor))
+                break;
+        }
+
+        //a partial list shown as complete would let a customer miss (or fail to remove) a card
+        throw new NopException($"The saved cards of customer {squareCustomerId} could not be listed completely");
     }
 
     /// <summary>
