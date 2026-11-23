@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"D:\\claude-runs\\t11mehnoor-task11-square-s2-s4-none-sonnet55high-007\\repo\\.claude\\hooks\\maxio-process-guard.ps1\"",
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "matcher": "WebSearch|WebFetch",
+        "hooks": [
+          {
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"D:\\claude-runs\\t11mehnoor-task11-square-s2-s4-none-sonnet55high-007\\repo\\.claude\\hooks\\task11-web-guard.ps1\"",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
