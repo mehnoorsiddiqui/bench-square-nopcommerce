@@ -62,8 +62,9 @@ public class SquareClientFactory : ISquareClientFactory
         //the HttpClient comes from the factory (bounded attempts, store proxy settings)
         var options = new SquareClientOptions
         {
-            BearerAuth = settings.AccessToken,
-            Environment = settings.UseSandbox ? ServerEnvironment.Environment2 : ServerEnvironment.Production,
+            //never null: an unset credential would be read from the SQUARE_BEARER_AUTH variable, which is not this store's token
+            BearerAuth = settings.AccessToken ?? string.Empty,
+            Environment = settings.UseSandbox ? ServerEnvironment.Sandbox : ServerEnvironment.Production,
             Retry = RetryOptions.Default() with { Timeout = SquarePaymentDefaults.RequestTimeout },
             //set explicitly: an unset factory lets the SQUARE_LOG variable log request bodies (card nonces, addresses)
             Logging = new LoggingOptions { LoggerFactory = NullLoggerFactory.Instance },
