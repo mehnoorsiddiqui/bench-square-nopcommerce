@@ -79,7 +79,7 @@ public class LegacyTransactionService
     /// </summary>
     private static bool IsActiveRefund(Refund refund)
     {
-        return refund.Status is "PENDING" or "APPROVED";
+        return refund.Status?.Value is "PENDING" or "APPROVED";
     }
 
     #endregion
@@ -156,7 +156,7 @@ public class LegacyTransactionService
                     .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
                     .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
-                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency, paid, paid - refunded);
+                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
             })
             .ToList();
     }
@@ -188,7 +188,7 @@ public class LegacyTransactionService
             {
                 IdempotencyKey = Guid.NewGuid().ToString(),
                 PaymentId = tender.TenderId,
-                AmountMoney = new Money { Amount = amount, Currency = currency ?? tender.Currency },
+                AmountMoney = new Money { Amount = amount, Currency = SquareValues.ToCurrency(currency ?? tender.Currency) },
                 Reason = $"nopCommerce refund of legacy transaction {reference.TransactionId}"
             }
         }) ?? throw new NopException("No service response");
