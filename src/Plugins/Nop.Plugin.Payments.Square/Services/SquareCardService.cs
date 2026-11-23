@@ -1,7 +1,7 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -38,29 +38,27 @@ public class SquareCardService
 
     #region Utilities
 
+    private static readonly IReadOnlyDictionary<CardBrand, string> BrandNames = new Dictionary<CardBrand, string>
+    {
+        [CardBrand.Visa] = "Visa",
+        [CardBrand.Mastercard] = "Mastercard",
+        [CardBrand.AmericanExpress] = "American Express",
+        [CardBrand.Discover] = "Discover",
+        [CardBrand.DiscoverDiners] = "Diners Club",
+        [CardBrand.Jcb] = "JCB",
+        [CardBrand.ChinaUnionpay] = "UnionPay",
+        [CardBrand.SquareGiftCard] = "Square Gift Card",
+        [CardBrand.Interac] = "Interac",
+        [CardBrand.Eftpos] = "EFTPOS"
+    };
+
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
-        {
-            "VISA" => "Visa",
-            "MASTERCARD" => "Mastercard",
-            "AMERICAN_EXPRESS" => "American Express",
-            "DISCOVER" => "Discover",
-            "DISCOVER_DINERS" => "Diners Club",
-            "JCB" => "JCB",
-            "CHINA_UNIONPAY" => "UnionPay",
-            "SQUARE_GIFT_CARD" => "Square Gift Card",
-            "INTERAC" => "Interac",
-            "EFTPOS" => "EFTPOS",
-            _ => "Card"
-        };
+        var brand = card.CardBrand != null && BrandNames.TryGetValue(card.CardBrand, out var brandName) ? brandName : "Card";
 
-        var cardType = card.CardType switch
-        {
-            "CREDIT" => "Credit",
-            "DEBIT" => "Debit",
-            _ => null
-        };
+        var cardType = card.CardType == CardType.Credit ? "Credit"
+            : card.CardType == CardType.Debit ? "Debit"
+            : null;
 
         return new SavedCardInfo(card.Id, brand, cardType, card.Last4, card.ExpMonth, card.ExpYear);
     }
@@ -80,13 +78,23 @@ public class SquareCardService
         if (string.IsNullOrEmpty(squareCustomerId))
             return new List<SavedCardInfo>();
 
+        //the customer profile no longer lists its cards: read them from the Cards API, which returns them page by page
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
+        var cards = new List<Card>();
+        string cursor = null;
+        do
+        {
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+            SquareResponse.ThrowIfErrors(response.Errors);
 
-        return (response.Customer?.Cards ?? [])
+            cards.AddRange(response.Cards ?? []);
+            cursor = response.Cursor;
+        }
+        while (!string.IsNullOrEmpty(cursor));
+
+        return cards
             .Where(card => card.Enabled != false)
             .Select(ToSavedCard)
             .ToList();
