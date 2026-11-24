@@ -53,7 +53,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ApimaticBench.Square" Version="1.2.0" />
+    <PackageReference Include="ApimaticBench.Square" Version="3.0.0" />
   </ItemGroup>
 
   <ItemGroup>
