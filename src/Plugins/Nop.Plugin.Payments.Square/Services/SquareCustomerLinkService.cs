@@ -4,6 +4,7 @@ using Nop.Core;
 using Square.Core.ErrorResponse;
 using Square.Core.Exceptions;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.CustomerCustomAttributes;
 
 namespace Nop.Plugin.Payments.Square.Services;
@@ -68,7 +69,7 @@ public class SquareCustomerLinkService
                         {
                             ["$ref"] = "https://developer-production-s.squarecdn.com/schemas/v1/common.json#squareup.common.String"
                         },
-                        Visibility = "VISIBILITY_HIDDEN"
+                        Visibility = CustomAttributeDefinitionVisibility.VisibilityHidden
                     }
                 }
             }) ?? throw new NopException("No service response");
