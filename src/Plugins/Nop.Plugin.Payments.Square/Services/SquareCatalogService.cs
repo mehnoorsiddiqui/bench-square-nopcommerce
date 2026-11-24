@@ -1,5 +1,7 @@
 using Nop.Core;
+using Square.Core.Models;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Catalog;
 
 namespace Nop.Plugin.Payments.Square.Services;
@@ -50,6 +52,23 @@ public class SquareCatalogService
 
     #endregion
 
+    #region Utilities
+
+    /// <summary>
+    /// 3.0.0 CatalogItem no longer declares the availability flags, so they travel in the extension-data bag under their wire names
+    /// </summary>
+    private static AdditionalProperties BuildAvailability(CatalogProductInfo product)
+    {
+        var availability = new AdditionalProperties();
+        availability.Set("available_online", product.Published);
+        availability.Set("available_for_pickup", product.Published && !product.IsDownload);
+        availability.Set("available_electronically", product.IsDownload);
+
+        return availability;
+    }
+
+    #endregion
+
     #region Methods
 
     /// <summary>
@@ -85,28 +104,27 @@ public class SquareCatalogService
                 IdempotencyKey = BuildIdempotencyKey(product),
                 Object = new CatalogObject
                 {
-                    Type = "ITEM",
+                    Type = CatalogObjectType.Item,
                     Id = itemId,
                     ItemData = new CatalogItem
                     {
                         Name = product.Name,
-                        ProductType = "REGULAR",
-                        AvailableOnline = product.Published,
-                        AvailableForPickup = product.Published && !product.IsDownload,
-                        AvailableElectronically = product.IsDownload,
+                        ProductType = CatalogItemProductType.Regular,
+                        //3.0.0 CatalogItem no longer declares these availability flags: they travel in the extension-data bag under their wire names
+                        AdditionalProperties = BuildAvailability(product),
                         Variations =
                         [
                             new CatalogObject
                             {
-                                Type = "ITEM_VARIATION",
+                                Type = CatalogObjectType.ItemVariation,
                                 Id = variationId,
                                 ItemVariationData = new CatalogItemVariation
                                 {
                                     ItemId = itemId,
                                     Name = product.VariationName,
                                     Sku = product.Sku,
-                                    PricingType = "FIXED_PRICING",
-                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = product.Currency },
+                                    PricingType = CatalogPricingType.FixedPricing,
+                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = SquareResponse.ToCurrency(product.Currency) },
                                     TrackInventory = true
                                 }
                             }
