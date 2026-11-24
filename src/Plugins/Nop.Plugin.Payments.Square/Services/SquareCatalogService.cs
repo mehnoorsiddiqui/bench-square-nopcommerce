@@ -1,5 +1,7 @@
 using Nop.Core;
+using Square.Core.Models;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Catalog;
 
 namespace Nop.Plugin.Payments.Square.Services;
@@ -50,6 +52,29 @@ public class SquareCatalogService
 
     #endregion
 
+    #region Utilities
+
+    /// <summary>
+    /// Builds the availability flags of an item
+    /// </summary>
+    /// <remarks>
+    /// CatalogItem (SDK 3.0.0) does not declare "available_online", "available_for_pickup" and "available_electronically",
+    /// so they travel in the model's extension-data bag, whose entries are written into the item's JSON object under their wire names
+    /// </remarks>
+    /// <param name="product">Product</param>
+    /// <returns>Extension data of the item</returns>
+    private static AdditionalProperties BuildAvailability(CatalogProductInfo product)
+    {
+        var availability = new AdditionalProperties();
+        availability.Set("available_online", product.Published);
+        availability.Set("available_for_pickup", product.Published && !product.IsDownload);
+        availability.Set("available_electronically", product.IsDownload);
+
+        return availability;
+    }
+
+    #endregion
+
     #region Methods
 
     /// <summary>
@@ -85,28 +110,26 @@ public class SquareCatalogService
                 IdempotencyKey = BuildIdempotencyKey(product),
                 Object = new CatalogObject
                 {
-                    Type = "ITEM",
+                    Type = CatalogObjectType.Item,
                     Id = itemId,
                     ItemData = new CatalogItem
                     {
                         Name = product.Name,
-                        ProductType = "REGULAR",
-                        AvailableOnline = product.Published,
-                        AvailableForPickup = product.Published && !product.IsDownload,
-                        AvailableElectronically = product.IsDownload,
+                        ProductType = CatalogItemProductType.Regular,
+                        AdditionalProperties = BuildAvailability(product),
                         Variations =
                         [
                             new CatalogObject
                             {
-                                Type = "ITEM_VARIATION",
+                                Type = CatalogObjectType.ItemVariation,
                                 Id = variationId,
                                 ItemVariationData = new CatalogItemVariation
                                 {
                                     ItemId = itemId,
                                     Name = product.VariationName,
                                     Sku = product.Sku,
-                                    PricingType = "FIXED_PRICING",
-                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = product.Currency },
+                                    PricingType = CatalogPricingType.FixedPricing,
+                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = SquareCodes.ToCurrency(product.Currency) },
                                     TrackInventory = true
                                 }
                             }
