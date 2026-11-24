@@ -1,6 +1,7 @@
 using System.Globalization;
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Inventory;
 
 namespace Nop.Plugin.Payments.Square.Services;
@@ -76,13 +77,13 @@ public class SquareInventoryService
 
         await ChangeInventoryAsync(new InventoryChange
         {
-            Type = "ADJUSTMENT",
+            Type = InventoryChangeType.Adjustment,
             Adjustment = new InventoryAdjustment
             {
                 CatalogObjectId = catalogObjectId,
                 LocationId = locationId,
-                FromState = quantityDelta > 0 ? "NONE" : "IN_STOCK",
-                ToState = quantityDelta > 0 ? "IN_STOCK" : "SOLD",
+                FromState = quantityDelta > 0 ? InventoryState.None : InventoryState.InStock,
+                ToState = quantityDelta > 0 ? InventoryState.InStock : InventoryState.Sold,
                 Quantity = FormatQuantity(Math.Abs(quantityDelta)),
                 OccurredAt = FormatTime(occurredAtUtc)
             }
@@ -107,13 +108,13 @@ public class SquareInventoryService
 
         var response = await ChangeInventoryAsync(new InventoryChange
         {
-            Type = "TRANSFER",
+            Type = InventoryChangeType.Transfer,
             Transfer = new InventoryTransfer
             {
                 CatalogObjectId = catalogObjectId,
                 FromLocationId = fromLocationId,
                 ToLocationId = toLocationId,
-                State = "IN_STOCK",
+                State = InventoryState.InStock,
                 Quantity = FormatQuantity(quantity),
                 OccurredAt = FormatTime(occurredAtUtc)
             }
@@ -130,7 +131,7 @@ public class SquareInventoryService
         SquareResponse.ThrowIfErrors(transferResponse.Errors);
 
         bool completed;
-        switch (transferResponse.Transfer?.State)
+        switch (transferResponse.Transfer?.State?.Value)
         {
             case "IN_STOCK":
                 completed = true;
@@ -162,14 +163,14 @@ public class SquareInventoryService
             {
                 CatalogObjectIds = [catalogObjectId],
                 LocationIds = [locationId],
-                States = ["IN_STOCK"]
+                States = [InventoryState.InStock]
             }
         }) ?? throw new NopException("No service response");
 
         SquareResponse.ThrowIfErrors(response.Errors);
 
         return (response.Counts ?? [])
-            .Where(count => count.State == "IN_STOCK")
+            .Where(count => count.State == InventoryState.InStock)
             .Sum(count => decimal.Parse(count.Quantity ?? "0", CultureInfo.InvariantCulture));
     }
 

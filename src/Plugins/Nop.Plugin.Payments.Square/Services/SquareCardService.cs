@@ -1,5 +1,6 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
 using Square.Requests.Customers;
 
@@ -40,7 +41,7 @@ public class SquareCardService
 
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
+        var brand = card.CardBrand?.Value switch
         {
             "VISA" => "Visa",
             "MASTERCARD" => "Mastercard",
@@ -55,7 +56,7 @@ public class SquareCardService
             _ => "Card"
         };
 
-        var cardType = card.CardType switch
+        var cardType = card.CardType?.Value switch
         {
             "CREDIT" => "Credit",
             "DEBIT" => "Debit",
@@ -86,7 +87,21 @@ public class SquareCardService
 
         SquareResponse.ThrowIfErrors(response.Errors);
 
-        return (response.Customer?.Cards ?? [])
+        //the customer no longer embeds its cards: list them (disabled ones are excluded by default), page by page
+        var cards = new List<Card>();
+        string cursor = null;
+        do
+        {
+            var cardsResponse = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
+
+            SquareResponse.ThrowIfErrors(cardsResponse.Errors);
+
+            cards.AddRange(cardsResponse.Cards ?? []);
+            cursor = cardsResponse.Cursor;
+        } while (!string.IsNullOrEmpty(cursor));
+
+        return cards
             .Where(card => card.Enabled != false)
             .Select(ToSavedCard)
             .ToList();
