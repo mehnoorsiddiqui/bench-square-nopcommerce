@@ -1,7 +1,6 @@
 using Nop.Core;
 using Square.Models;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -21,6 +20,15 @@ public record SavedCardInfo(string Id, string Brand, string CardType, string Las
 /// </summary>
 public class SquareCardService
 {
+    #region Constants
+
+    /// <summary>
+    /// Most pages of cards read for one customer (Square returns at most 25 cards per page)
+    /// </summary>
+    private const int MaxCardPages = 40;
+
+    #endregion
+
     #region Fields
 
     private readonly ISquareClientFactory _squareClientFactory;
@@ -40,7 +48,8 @@ public class SquareCardService
 
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
+        //brand and type are open enums; switch on their wire values
+        var brand = card.CardBrand?.Value switch
         {
             "VISA" => "Visa",
             "MASTERCARD" => "Mastercard",
@@ -55,7 +64,7 @@ public class SquareCardService
             _ => "Card"
         };
 
-        var cardType = card.CardType switch
+        var cardType = card.CardType?.Value switch
         {
             "CREDIT" => "Credit",
             "DEBIT" => "Debit",
@@ -80,13 +89,33 @@ public class SquareCardService
         if (string.IsNullOrEmpty(squareCustomerId))
             return new List<SavedCardInfo>();
 
+        //the customer no longer carries its cards: list the cards filtered by the customer, page by page
+        //(the customer filter must always be set, an unfiltered list returns every card of the merchant)
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
+        var cards = new List<Card>();
+        string cursor = null;
+        for (var page = 0; ; page++)
+        {
+            if (page >= MaxCardPages)
+                throw new NopException($"The customer has more saved cards than can be read ({MaxCardPages} pages)");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        return (response.Customer?.Cards ?? [])
+            SquareResponse.ThrowIfErrors(response.Errors);
+
+            cards.AddRange(response.Cards ?? []);
+
+            //stop at the last page; a cursor that does not move on would never end
+            if (string.IsNullOrEmpty(response.Cursor))
+                break;
+            if (response.Cursor == cursor)
+                throw new NopException("Square returned the same page of saved cards twice");
+
+            cursor = response.Cursor;
+        }
+
+        return cards
             .Where(card => card.Enabled != false)
             .Select(ToSavedCard)
             .ToList();
