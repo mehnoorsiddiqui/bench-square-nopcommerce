@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Refunds;
 using Square.Requests.Transactions;
 
@@ -79,7 +80,7 @@ public class LegacyTransactionService
     /// </summary>
     private static bool IsActiveRefund(Refund refund)
     {
-        return refund.Status is "PENDING" or "APPROVED";
+        return refund.Status == RefundStatus.Pending || refund.Status == RefundStatus.Approved;
     }
 
     #endregion
@@ -156,7 +157,7 @@ public class LegacyTransactionService
                     .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
                     .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
-                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency, paid, paid - refunded);
+                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
             })
             .ToList();
     }
@@ -180,6 +181,10 @@ public class LegacyTransactionService
         var tender = balances.FirstOrDefault(balance => balance.Refundable >= amount)
             ?? throw new NopException($"The refund exceeds the refundable amount of transaction {reference.TransactionId} ({balances.Sum(balance => balance.Refundable)})");
 
+        var currencyCode = currency ?? tender.Currency;
+        if (!Currency.TryGetKnownValue(currencyCode, out var refundCurrency))
+            throw new NopException($"The {currencyCode} currency is not supported by Square");
+
         //a legacy tender's identifier is the identifier of its payment in the Payments API
         var client = await _squareClientFactory.CreateAsync(storeId);
         var response = await client.Refunds.RefundPayment(new RefundPaymentOperationRequest
@@ -188,7 +193,7 @@ public class LegacyTransactionService
             {
                 IdempotencyKey = Guid.NewGuid().ToString(),
                 PaymentId = tender.TenderId,
-                AmountMoney = new Money { Amount = amount, Currency = currency ?? tender.Currency },
+                AmountMoney = new Money { Amount = amount, Currency = refundCurrency },
                 Reason = $"nopCommerce refund of legacy transaction {reference.TransactionId}"
             }
         }) ?? throw new NopException("No service response");
