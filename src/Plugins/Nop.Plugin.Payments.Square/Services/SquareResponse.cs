@@ -1,5 +1,6 @@
-using Nop.Core;
+﻿using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -20,5 +21,19 @@ public static class SquareResponse
         var errorsMessage = string.Join(";", errors.Select(error => error.Detail));
 
         throw new NopException($"There are errors in the service response. {errorsMessage}");
+    }
+
+    /// <summary>
+    /// Converts an ISO 4217 currency code to the Square currency
+    /// </summary>
+    /// <param name="currencyCode">Currency code</param>
+    /// <returns>The Square currency</returns>
+    public static Currency ToCurrency(string currencyCode)
+    {
+        //the SDK's currency is an open enum without a public factory: only the declared codes can be sent
+        if (Currency.TryGetKnownValue(currencyCode?.ToUpperInvariant(), out var currency) && currency != null)
+            return currency;
+
+        throw new NopException($"The {currencyCode} currency is not supported by the Square SDK");
     }
 }
