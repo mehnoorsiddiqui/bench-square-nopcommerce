@@ -23,6 +23,7 @@ using Nop.Services.Payments;
 using Nop.Services.Plugins;
 using Nop.Services.ScheduleTasks;
 using Nop.Web.Framework.UI;
+using SquareEnums = Square.Models.Enums;
 using SquareModel = Square.Models;
 
 namespace Nop.Plugin.Payments.Square;
@@ -207,6 +208,11 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
                 return null;
 
             var country = await _countryService.GetCountryByAddressAsync(address);
+            var countryCode = string.Equals(country?.TwoLetterIsoCode, new RegionInfo(country?.TwoLetterIsoCode).TwoLetterISORegionName, StringComparison.InvariantCultureIgnoreCase)
+                ? country?.TwoLetterIsoCode : null;
+
+            //a country Square does not declare is left out, like an invalid one
+            SquareEnums.Country.TryGetKnownValue(countryCode, out var squareCountry);
 
             return new SquareModel.Address
             {
@@ -214,8 +220,7 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
                 AddressLine2 = CommonHelper.EnsureMaximumLength(address.Address2, 500),
                 AdministrativeDistrictLevel1 = CommonHelper.EnsureMaximumLength((await _stateProvinceService.GetStateProvinceByAddressAsync(address))?.Abbreviation, 200),
                 AdministrativeDistrictLevel2 = CommonHelper.EnsureMaximumLength(address.County, 200),
-                Country = string.Equals(country?.TwoLetterIsoCode, new RegionInfo(country?.TwoLetterIsoCode).TwoLetterISORegionName, StringComparison.InvariantCultureIgnoreCase)
-                    ? country?.TwoLetterIsoCode : null,
+                Country = squareCountry,
                 FirstName = CommonHelper.EnsureMaximumLength(address.FirstName, 300),
                 LastName = CommonHelper.EnsureMaximumLength(address.LastName, 300),
                 Locality = CommonHelper.EnsureMaximumLength(address.City, 300),
@@ -237,7 +242,7 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         //the amount of money, in the smallest denomination of the currency indicated by currency. For example, when currency is USD, amount is in cents;
         //most currencies consist of 100 units of smaller denomination, so we multiply the total by 100
         var orderTotal = (int)(paymentRequest.OrderTotal * 100);
-        var amountMoney = new SquareModel.Money { Amount = orderTotal, Currency = currency.CurrencyCode };
+        var amountMoney = new SquareModel.Money { Amount = orderTotal, Currency = SquareCurrency.Parse(currency.CurrencyCode) };
 
         //try to get the verification token if exists
         var tokenKey = await _localizationService.GetResourceAsync("Plugins.Payments.Square.Fields.Token.Key");
@@ -508,7 +513,7 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         //the amount of money in the smallest denomination of the currency indicated by currency. For example, when currency is USD, amount is in cents;
         //most currencies consist of 100 units of smaller denomination, so we multiply the total by 100
         var orderTotal = (int)(refundPaymentRequest.AmountToRefund * 100);
-        var amountMoney = new SquareModel.Money { Amount = orderTotal, Currency = currency.CurrencyCode };
+        var amountMoney = new SquareModel.Money { Amount = orderTotal, Currency = SquareCurrency.Parse(currency.CurrencyCode) };
 
         //first try to get the transaction for current store
         var storeId = (await _storeContext.GetCurrentStoreAsync()).Id;

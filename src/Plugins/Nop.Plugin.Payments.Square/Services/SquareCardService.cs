@@ -1,7 +1,7 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -38,29 +38,37 @@ public class SquareCardService
 
     #region Utilities
 
+    /// <summary>
+    /// Display names of the card brands; any other brand is shown as "Card"
+    /// </summary>
+    private static readonly IReadOnlyList<(CardBrand Brand, string Name)> _brandNames =
+    [
+        (CardBrand.Visa, "Visa"),
+        (CardBrand.Mastercard, "Mastercard"),
+        (CardBrand.AmericanExpress, "American Express"),
+        (CardBrand.Discover, "Discover"),
+        (CardBrand.DiscoverDiners, "Diners Club"),
+        (CardBrand.Jcb, "JCB"),
+        (CardBrand.ChinaUnionpay, "UnionPay"),
+        (CardBrand.SquareGiftCard, "Square Gift Card"),
+        (CardBrand.Interac, "Interac"),
+        (CardBrand.Eftpos, "EFTPOS")
+    ];
+
+    /// <summary>
+    /// Most pages of saved cards read for one customer (Square returns at most 25 cards per page)
+    /// </summary>
+    private const int MaxCardPages = 20;
+
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
-        {
-            "VISA" => "Visa",
-            "MASTERCARD" => "Mastercard",
-            "AMERICAN_EXPRESS" => "American Express",
-            "DISCOVER" => "Discover",
-            "DISCOVER_DINERS" => "Diners Club",
-            "JCB" => "JCB",
-            "CHINA_UNIONPAY" => "UnionPay",
-            "SQUARE_GIFT_CARD" => "Square Gift Card",
-            "INTERAC" => "Interac",
-            "EFTPOS" => "EFTPOS",
-            _ => "Card"
-        };
+        var brand = _brandNames.FirstOrDefault(entry => entry.Brand == card.CardBrand).Name ?? "Card";
 
-        var cardType = card.CardType switch
-        {
-            "CREDIT" => "Credit",
-            "DEBIT" => "Debit",
-            _ => null
-        };
+        string cardType = null;
+        if (card.CardType == CardType.Credit)
+            cardType = "Credit";
+        else if (card.CardType == CardType.Debit)
+            cardType = "Debit";
 
         return new SavedCardInfo(card.Id, brand, cardType, card.Last4, card.ExpMonth, card.ExpYear);
     }
@@ -80,13 +88,29 @@ public class SquareCardService
         if (string.IsNullOrEmpty(squareCustomerId))
             return new List<SavedCardInfo>();
 
+        //cards on file are listed by customer (the customer profile no longer carries them); the list comes in pages
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
+        var cards = new List<Card>();
+        string cursor = null;
+        var pages = 0;
+        do
+        {
+            if (++pages > MaxCardPages)
+                throw new NopException($"The saved cards of customer {squareCustomerId} could not all be read: there are more than {MaxCardPages} pages");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        return (response.Customer?.Cards ?? [])
+            SquareResponse.ThrowIfErrors(response.Errors);
+
+            cards.AddRange(response.Cards ?? []);
+
+            //stop when Square hands out no next page, or the same one again
+            cursor = response.Cursor == cursor ? null : response.Cursor;
+        }
+        while (!string.IsNullOrEmpty(cursor));
+
+        return cards
             .Where(card => card.Enabled != false)
             .Select(ToSavedCard)
             .ToList();
