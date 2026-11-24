@@ -1,5 +1,8 @@
+using System.Security.Cryptography;
+using System.Text;
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Catalog;
 
 namespace Nop.Plugin.Payments.Square.Services;
@@ -52,6 +55,8 @@ public class SquareCatalogService
 
     #region Methods
 
+    private const int MaxIdempotencyKeyLength = 128;
+
     /// <summary>
     /// Builds the idempotency key of a product update: retrying the same update reuses the key,
     /// a later update of the product gets a new one
@@ -60,7 +65,13 @@ public class SquareCatalogService
     /// <returns>Idempotency key</returns>
     public static string BuildIdempotencyKey(CatalogProductInfo product)
     {
-        return $"nop:{product.StoreName}:{product.ProductId}:{product.Sku}:{product.VariationName}:{product.UpdatedOnUtc:yyyyMMddHHmmssfff}";
+        var key = $"nop:{product.StoreName}:{product.ProductId}:{product.Sku}:{product.VariationName}:{product.UpdatedOnUtc:yyyyMMddHHmmssfff}";
+
+        //Square accepts keys of at most 128 characters: a longer one is replaced by its hash, which is just as stable
+        if (key.Length <= MaxIdempotencyKeyLength)
+            return key;
+
+        return "nop:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
     }
 
     /// <summary>
@@ -85,28 +96,25 @@ public class SquareCatalogService
                 IdempotencyKey = BuildIdempotencyKey(product),
                 Object = new CatalogObject
                 {
-                    Type = "ITEM",
+                    Type = CatalogObjectType.Item,
                     Id = itemId,
                     ItemData = new CatalogItem
                     {
                         Name = product.Name,
-                        ProductType = "REGULAR",
-                        AvailableOnline = product.Published,
-                        AvailableForPickup = product.Published && !product.IsDownload,
-                        AvailableElectronically = product.IsDownload,
+                        ProductType = CatalogItemProductType.Regular,
                         Variations =
                         [
                             new CatalogObject
                             {
-                                Type = "ITEM_VARIATION",
+                                Type = CatalogObjectType.ItemVariation,
                                 Id = variationId,
                                 ItemVariationData = new CatalogItemVariation
                                 {
                                     ItemId = itemId,
                                     Name = product.VariationName,
                                     Sku = product.Sku,
-                                    PricingType = "FIXED_PRICING",
-                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = product.Currency },
+                                    PricingType = CatalogPricingType.FixedPricing,
+                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = SquareCurrency.Parse(product.Currency) },
                                     TrackInventory = true
                                 }
                             }
