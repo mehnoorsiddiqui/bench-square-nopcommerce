@@ -1,7 +1,7 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -21,6 +21,15 @@ public record SavedCardInfo(string Id, string Brand, string CardType, string Las
 /// </summary>
 public class SquareCardService
 {
+    #region Constants
+
+    /// <summary>
+    /// Most pages of saved cards read for one customer
+    /// </summary>
+    private const int MAX_CARD_PAGES = 10;
+
+    #endregion
+
     #region Fields
 
     private readonly ISquareClientFactory _squareClientFactory;
@@ -40,25 +49,26 @@ public class SquareCardService
 
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
+        var cardBrand = card.CardBrand;
+        var brand = cardBrand switch
         {
-            "VISA" => "Visa",
-            "MASTERCARD" => "Mastercard",
-            "AMERICAN_EXPRESS" => "American Express",
-            "DISCOVER" => "Discover",
-            "DISCOVER_DINERS" => "Diners Club",
-            "JCB" => "JCB",
-            "CHINA_UNIONPAY" => "UnionPay",
-            "SQUARE_GIFT_CARD" => "Square Gift Card",
-            "INTERAC" => "Interac",
-            "EFTPOS" => "EFTPOS",
+            _ when cardBrand == CardBrand.Visa => "Visa",
+            _ when cardBrand == CardBrand.Mastercard => "Mastercard",
+            _ when cardBrand == CardBrand.AmericanExpress => "American Express",
+            _ when cardBrand == CardBrand.Discover => "Discover",
+            _ when cardBrand == CardBrand.DiscoverDiners => "Diners Club",
+            _ when cardBrand == CardBrand.Jcb => "JCB",
+            _ when cardBrand == CardBrand.ChinaUnionpay => "UnionPay",
+            _ when cardBrand == CardBrand.SquareGiftCard => "Square Gift Card",
+            _ when cardBrand == CardBrand.Interac => "Interac",
+            _ when cardBrand == CardBrand.Eftpos => "EFTPOS",
             _ => "Card"
         };
 
         var cardType = card.CardType switch
         {
-            "CREDIT" => "Credit",
-            "DEBIT" => "Debit",
+            var type when type == CardType.Credit => "Credit",
+            var type when type == CardType.Debit => "Debit",
             _ => null
         };
 
@@ -80,13 +90,32 @@ public class SquareCardService
         if (string.IsNullOrEmpty(squareCustomerId))
             return new List<SavedCardInfo>();
 
+        //cards on file are listed by customer (one page per call, the cursor leads to the next one)
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
+        var cards = new List<Card>();
+        string cursor = null;
+        var pages = 0;
+        do
+        {
+            if (++pages > MAX_CARD_PAGES)
+                throw new NopException($"The saved cards of customer {squareCustomerId} span more than {MAX_CARD_PAGES} pages");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        return (response.Customer?.Cards ?? [])
+            SquareResponse.ThrowIfErrors(response.Errors);
+
+            cards.AddRange(response.Cards ?? []);
+
+            //a cursor that does not move would return the same page again
+            if (!string.IsNullOrEmpty(response.Cursor) && response.Cursor == cursor)
+                throw new NopException($"Square returned the same page of saved cards of customer {squareCustomerId} twice");
+
+            cursor = string.IsNullOrEmpty(response.Cursor) ? null : response.Cursor;
+        }
+        while (cursor != null);
+
+        return cards
             .Where(card => card.Enabled != false)
             .Select(ToSavedCard)
             .ToList();
