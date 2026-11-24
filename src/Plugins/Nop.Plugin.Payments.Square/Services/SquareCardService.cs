@@ -1,7 +1,6 @@
 using Nop.Core;
 using Square.Models;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -40,7 +39,7 @@ public class SquareCardService
 
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
+        var brand = card.CardBrand?.Value switch
         {
             "VISA" => "Visa",
             "MASTERCARD" => "Mastercard",
@@ -55,7 +54,7 @@ public class SquareCardService
             _ => "Card"
         };
 
-        var cardType = card.CardType switch
+        var cardType = card.CardType?.Value switch
         {
             "CREDIT" => "Credit",
             "DEBIT" => "Debit",
@@ -80,16 +79,26 @@ public class SquareCardService
         if (string.IsNullOrEmpty(squareCustomerId))
             return new List<SavedCardInfo>();
 
+        //the customer profile no longer lists its cards (3.0.0 dropped Customer.Cards), so read them from the Cards API;
+        //Square returns at most 25 cards per page, so follow the cursor
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
+        var cards = new List<SavedCardInfo>();
+        string cursor = null;
+        do
+        {
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+            SquareResponse.ThrowIfErrors(response.Errors);
 
-        return (response.Customer?.Cards ?? [])
-            .Where(card => card.Enabled != false)
-            .Select(ToSavedCard)
-            .ToList();
+            cards.AddRange((response.Cards ?? [])
+                .Where(card => card.Enabled != false)
+                .Select(ToSavedCard));
+
+            cursor = response.Cursor;
+        } while (!string.IsNullOrEmpty(cursor));
+
+        return cards;
     }
 
     /// <summary>
