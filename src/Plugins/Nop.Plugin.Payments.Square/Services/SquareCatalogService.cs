@@ -1,5 +1,8 @@
+using System.Security.Cryptography;
+using System.Text;
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Catalog;
 
 namespace Nop.Plugin.Payments.Square.Services;
@@ -14,8 +17,9 @@ namespace Nop.Plugin.Payments.Square.Services;
 /// <param name="VariationName">Name of the variation (e.g. "Regular")</param>
 /// <param name="PriceAmount">Price in the smallest currency unit</param>
 /// <param name="Currency">Currency code</param>
-/// <param name="Published">Whether the product is published in the online store</param>
-/// <param name="IsDownload">Whether the product is downloadable</param>
+/// <param name="Published">Whether the product is published in the online store (not sent to Square: the SDK no longer
+/// models the item's online availability flags)</param>
+/// <param name="IsDownload">Whether the product is downloadable (not sent to Square, see <paramref name="Published"/>)</param>
 /// <param name="UpdatedOnUtc">When the product was last updated</param>
 /// <param name="ItemId">Square item identifier, when the product was synchronized before</param>
 /// <param name="VariationId">Square item variation identifier, when the product was synchronized before</param>
@@ -35,6 +39,15 @@ public record CatalogSyncResult(string ItemId, string VariationId);
 /// </summary>
 public class SquareCatalogService
 {
+    #region Constants
+
+    /// <summary>
+    /// Longest idempotency key Square accepts for a catalog upsert
+    /// </summary>
+    private const int MaxIdempotencyKeyLength = 128;
+
+    #endregion
+
     #region Fields
 
     private readonly ISquareClientFactory _squareClientFactory;
@@ -56,11 +69,19 @@ public class SquareCatalogService
     /// Builds the idempotency key of a product update: retrying the same update reuses the key,
     /// a later update of the product gets a new one
     /// </summary>
+    /// <remarks>
+    /// Square accepts keys of at most 128 characters; a longer key (long store names, SKUs or variation names)
+    /// is replaced by a hash of it, which is just as stable and unique
+    /// </remarks>
     /// <param name="product">Product</param>
     /// <returns>Idempotency key</returns>
     public static string BuildIdempotencyKey(CatalogProductInfo product)
     {
-        return $"nop:{product.StoreName}:{product.ProductId}:{product.Sku}:{product.VariationName}:{product.UpdatedOnUtc:yyyyMMddHHmmssfff}";
+        var key = $"nop:{product.StoreName}:{product.ProductId}:{product.Sku}:{product.VariationName}:{product.UpdatedOnUtc:yyyyMMddHHmmssfff}";
+        if (key.Length <= MaxIdempotencyKeyLength)
+            return key;
+
+        return $"nop:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))}";
     }
 
     /// <summary>
@@ -85,28 +106,25 @@ public class SquareCatalogService
                 IdempotencyKey = BuildIdempotencyKey(product),
                 Object = new CatalogObject
                 {
-                    Type = "ITEM",
+                    Type = CatalogObjectType.Item,
                     Id = itemId,
                     ItemData = new CatalogItem
                     {
                         Name = product.Name,
-                        ProductType = "REGULAR",
-                        AvailableOnline = product.Published,
-                        AvailableForPickup = product.Published && !product.IsDownload,
-                        AvailableElectronically = product.IsDownload,
+                        ProductType = CatalogItemProductType.Regular,
                         Variations =
                         [
                             new CatalogObject
                             {
-                                Type = "ITEM_VARIATION",
+                                Type = CatalogObjectType.ItemVariation,
                                 Id = variationId,
                                 ItemVariationData = new CatalogItemVariation
                                 {
                                     ItemId = itemId,
                                     Name = product.VariationName,
                                     Sku = product.Sku,
-                                    PricingType = "FIXED_PRICING",
-                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = product.Currency },
+                                    PricingType = CatalogPricingType.FixedPricing,
+                                    PriceMoney = SquareMoney.Create(product.PriceAmount, product.Currency),
                                     TrackInventory = true
                                 }
                             }
