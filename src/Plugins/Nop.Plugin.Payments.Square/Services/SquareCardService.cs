@@ -1,7 +1,6 @@
 using Nop.Core;
 using Square.Models;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -21,6 +20,15 @@ public record SavedCardInfo(string Id, string Brand, string CardType, string Las
 /// </summary>
 public class SquareCardService
 {
+    #region Constants
+
+    /// <summary>
+    /// Most pages of cards read for one customer
+    /// </summary>
+    private const int MaxCardPages = 20;
+
+    #endregion
+
     #region Fields
 
     private readonly ISquareClientFactory _squareClientFactory;
@@ -40,27 +48,29 @@ public class SquareCardService
 
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
-        {
-            "VISA" => "Visa",
-            "MASTERCARD" => "Mastercard",
-            "AMERICAN_EXPRESS" => "American Express",
-            "DISCOVER" => "Discover",
-            "DISCOVER_DINERS" => "Diners Club",
-            "JCB" => "JCB",
-            "CHINA_UNIONPAY" => "UnionPay",
-            "SQUARE_GIFT_CARD" => "Square Gift Card",
-            "INTERAC" => "Interac",
-            "EFTPOS" => "EFTPOS",
-            _ => "Card"
-        };
+        //brands the store has no display name for (and values this SDK does not declare) show as "Card"
+        var brand = card.CardBrand?.Match(
+            onOtherBrand: () => "Card",
+            onVisa: () => "Visa",
+            onMastercard: () => "Mastercard",
+            onAmericanExpress: () => "American Express",
+            onDiscover: () => "Discover",
+            onDiscoverDiners: () => "Diners Club",
+            onJcb: () => "JCB",
+            onChinaUnionpay: () => "UnionPay",
+            onSquareGiftCard: () => "Square Gift Card",
+            onSquareCapitalCard: () => "Card",
+            onInterac: () => "Interac",
+            onEftpos: () => "EFTPOS",
+            onFelica: () => "Card",
+            onEbt: () => "Card",
+            otherwise: _ => "Card") ?? "Card";
 
-        var cardType = card.CardType switch
-        {
-            "CREDIT" => "Credit",
-            "DEBIT" => "Debit",
-            _ => null
-        };
+        var cardType = card.CardType?.Match(
+            onUnknownCardType: () => null,
+            onCredit: () => "Credit",
+            onDebit: () => "Debit",
+            otherwise: _ => (string)null);
 
         return new SavedCardInfo(card.Id, brand, cardType, card.Last4, card.ExpMonth, card.ExpYear);
     }
@@ -80,13 +90,35 @@ public class SquareCardService
         if (string.IsNullOrEmpty(squareCustomerId))
             return new List<SavedCardInfo>();
 
+        //a customer's cards are listed by the Cards API (the customer object no longer carries them);
+        //the list is cursor-paged, so follow the cursor, bounded so a cursor that never ends cannot loop forever
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
+        var cards = new List<Card>();
+        string cursor = null;
+        var pages = 0;
+        do
+        {
+            if (++pages > MaxCardPages)
+                throw new NopException($"Square returned more than {MaxCardPages} pages of cards for customer {squareCustomerId}");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest
+            {
+                CustomerId = squareCustomerId,
+                Cursor = cursor
+            }) ?? throw new NopException("No service response");
 
-        return (response.Customer?.Cards ?? [])
+            SquareResponse.ThrowIfErrors(response.Errors);
+
+            cards.AddRange(response.Cards ?? []);
+
+            //an empty cursor is the last page; a cursor that does not advance would never end
+            if (!string.IsNullOrEmpty(response.Cursor) && response.Cursor == cursor)
+                throw new NopException($"Square returned the same cards cursor twice for customer {squareCustomerId}");
+
+            cursor = string.IsNullOrEmpty(response.Cursor) ? null : response.Cursor;
+        } while (cursor != null);
+
+        return cards
             .Where(card => card.Enabled != false)
             .Select(ToSavedCard)
             .ToList();
