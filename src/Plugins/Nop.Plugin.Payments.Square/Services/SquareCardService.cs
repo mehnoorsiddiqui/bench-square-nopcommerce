@@ -1,7 +1,7 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -40,7 +40,7 @@ public class SquareCardService
 
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
+        var brand = card.CardBrand?.Value switch
         {
             "VISA" => "Visa",
             "MASTERCARD" => "Mastercard",
@@ -55,7 +55,7 @@ public class SquareCardService
             _ => "Card"
         };
 
-        var cardType = card.CardType switch
+        var cardType = card.CardType?.Value switch
         {
             "CREDIT" => "Credit",
             "DEBIT" => "Debit",
@@ -81,12 +81,29 @@ public class SquareCardService
             return new List<SavedCardInfo>();
 
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+        //Customer no longer lists its cards in Square 3.0.0: read them from the Cards API, following the cursor
+        const int maxPages = 100;
+        var allCards = new List<Card>();
+        string cursor = null;
+        for (var page = 0; ; page++)
+        {
+            if (page >= maxPages)
+                throw new NopException("Too many pages of saved cards");
 
-        return (response.Customer?.Cards ?? [])
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
+
+            SquareResponse.ThrowIfErrors(response.Errors);
+
+            allCards.AddRange(response.Cards ?? []);
+
+            cursor = response.Cursor;
+            if (string.IsNullOrEmpty(cursor))
+                break;
+        }
+
+        return allCards
             .Where(card => card.Enabled != false)
             .Select(ToSavedCard)
             .ToList();
