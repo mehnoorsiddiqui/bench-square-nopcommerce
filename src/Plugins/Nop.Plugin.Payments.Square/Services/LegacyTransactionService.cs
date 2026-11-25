@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Refunds;
 using Square.Requests.Transactions;
 
@@ -50,7 +51,7 @@ public record LegacyTransactionReference(string LocationId, string TransactionId
 /// <param name="Currency">Currency of the tender</param>
 /// <param name="Paid">Amount paid with the tender, in the smallest currency unit</param>
 /// <param name="Refundable">Amount that can still be refunded, in the smallest currency unit</param>
-public record LegacyTenderBalance(string TenderId, string Currency, long Paid, long Refundable);
+public record LegacyTenderBalance(string TenderId, Currency Currency, long Paid, long Refundable);
 
 /// <summary>
 /// Captures, voids and refunds orders paid with Square's legacy Transactions API
@@ -79,7 +80,7 @@ public class LegacyTransactionService
     /// </summary>
     private static bool IsActiveRefund(Refund refund)
     {
-        return refund.Status is "PENDING" or "APPROVED";
+        return refund.Status == RefundStatus.Pending || refund.Status == RefundStatus.Approved;
     }
 
     #endregion
@@ -166,10 +167,10 @@ public class LegacyTransactionService
     /// </summary>
     /// <param name="reference">Legacy transaction reference</param>
     /// <param name="amount">Amount to refund, in the smallest currency unit</param>
-    /// <param name="currency">Currency code</param>
+    /// <param name="currency">Currency; the tender's currency when null</param>
     /// <param name="storeId">Store identifier</param>
     /// <returns>The asynchronous task whose result contains the refund status reported by Square</returns>
-    public async Task<string> RefundAsync(LegacyTransactionReference reference, long amount, string currency, int storeId)
+    public async Task<string> RefundAsync(LegacyTransactionReference reference, long amount, Currency currency, int storeId)
     {
         ArgumentNullException.ThrowIfNull(reference);
         if (amount <= 0)
