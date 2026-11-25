@@ -1,5 +1,6 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Catalog;
 
 namespace Nop.Plugin.Payments.Square.Services;
@@ -85,28 +86,27 @@ public class SquareCatalogService
                 IdempotencyKey = BuildIdempotencyKey(product),
                 Object = new CatalogObject
                 {
-                    Type = "ITEM",
+                    Type = CatalogObjectType.Item,
                     Id = itemId,
                     ItemData = new CatalogItem
                     {
                         Name = product.Name,
-                        ProductType = "REGULAR",
-                        AvailableOnline = product.Published,
-                        AvailableForPickup = product.Published && !product.IsDownload,
-                        AvailableElectronically = product.IsDownload,
+                        ProductType = CatalogItemProductType.Regular,
+                        //3.0.0 has no available_online / available_for_pickup / available_electronically on an item,
+                        //so Published and IsDownload no longer reach Square
                         Variations =
                         [
                             new CatalogObject
                             {
-                                Type = "ITEM_VARIATION",
+                                Type = CatalogObjectType.ItemVariation,
                                 Id = variationId,
                                 ItemVariationData = new CatalogItemVariation
                                 {
                                     ItemId = itemId,
                                     Name = product.VariationName,
                                     Sku = product.Sku,
-                                    PricingType = "FIXED_PRICING",
-                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = product.Currency },
+                                    PricingType = CatalogPricingType.FixedPricing,
+                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = SquareCodes.ToCurrency(product.Currency) },
                                     TrackInventory = true
                                 }
                             }

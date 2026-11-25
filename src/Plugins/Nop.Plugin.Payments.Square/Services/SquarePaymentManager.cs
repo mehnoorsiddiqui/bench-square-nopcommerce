@@ -8,6 +8,7 @@ using Nop.Services.Logging;
 using Square.Core.ErrorResponse;
 using Square.Core.Exceptions;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
 using Square.Requests.Customers;
 using Square.Requests.Locations;
@@ -128,7 +129,7 @@ public class SquarePaymentManager
     /// </summary>
     private static string DescribeError(Error error)
     {
-        return error.Code switch
+        return error.Code?.Value switch
         {
             "CARD_DECLINED" or "GENERIC_DECLINE" => "The card was declined. Please use a different card.",
             "INSUFFICIENT_FUNDS" => "The card has insufficient funds.",
@@ -183,7 +184,7 @@ public class SquarePaymentManager
         //an inactive location is a valid answer from Square, not a failure
         if (location == null
             || location.Status != SquarePaymentDefaults.Status.LOCATION_ACTIVE
-            || (!location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? true))
+            || (!location.Capabilities?.Contains(LocationCapability.CreditCardProcessing) ?? true))
         {
             await _logger.WarningAsync("Square payment warning: There are no selected active location for the account",
                 customer: await _workContext.GetCurrentCustomerAsync());
@@ -226,7 +227,7 @@ public class SquarePaymentManager
         //filter active locations and locations that can process credit cards
         var activeLocations = locations
             ?.Where(location => location?.Status == SquarePaymentDefaults.Status.LOCATION_ACTIVE &&
-                (location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? false))
+                (location.Capabilities?.Contains(LocationCapability.CreditCardProcessing) ?? false))
             .ToList() ?? new List<Location>();
 
         //an account with no usable location is a valid answer from Square, not a failure
