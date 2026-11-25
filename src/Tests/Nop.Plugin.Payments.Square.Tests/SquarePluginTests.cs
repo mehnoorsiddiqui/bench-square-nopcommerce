@@ -6,6 +6,7 @@ using Nop.Services.Configuration;
 using Nop.Services.Logging;
 using NUnit.Framework;
 using Square.Models;
+using Square.Models.Enums;
 
 namespace Nop.Plugin.Payments.Square.Tests;
 
@@ -15,19 +16,14 @@ public class SquareCardServiceTests
     [Test]
     public async Task SavedCards_ShowsEnabledCardsWithBrand()
     {
-        var square = new StubSquare().Respond("GET /v2/customers/C1", new RetrieveCustomerResponse
+        var square = new StubSquare().Respond("GET /v2/cards", new ListCardsResponse
         {
-            Customer = new Customer
-            {
-                Id = "C1",
-                Cards =
-                [
-                    new Card { Id = "ccof:1", CardBrand = "VISA", CardType = "CREDIT", Last4 = "1111", ExpMonth = 12, ExpYear = 2030, Enabled = true },
-                    new Card { Id = "ccof:2", CardBrand = "MASTERCARD", CardType = "DEBIT", Last4 = "4444", ExpMonth = 1, ExpYear = 2029, Enabled = false }
-                ]
-            }
+            Cards =
+            [
+                new Card { Id = "ccof:1", CardBrand = CardBrand.Visa, CardType = CardType.Credit, Last4 = "1111", ExpMonth = 12, ExpYear = 2030, Enabled = true },
+                new Card { Id = "ccof:2", CardBrand = CardBrand.Mastercard, CardType = CardType.Debit, Last4 = "4444", ExpMonth = 1, ExpYear = 2029, Enabled = false }
+            ]
         });
-
         var cards = await new SquareCardService(square).GetSavedCardsAsync("C1", 1);
 
         Assert.That(cards, Has.Count.EqualTo(1));
@@ -49,11 +45,11 @@ public class LegacyTransactionServiceTests
             {
                 Id = "T1",
                 LocationId = "L1",
-                Tenders = [new Tender { Id = "TND1", Type = "CARD", AmountMoney = new Money { Amount = 10000, Currency = "USD" } }],
+                Tenders = [new Tender { Id = "TND1", Type = TenderType.Card, AmountMoney = new Money { Amount = 10000, Currency = Currency.Usd } }],
                 Refunds =
                 [
-                    new Refund { Id = "R1", LocationId = "L1", TenderId = "TND1", Reason = "damaged", Status = "APPROVED", AmountMoney = new Money { Amount = 2500, Currency = "USD" } },
-                    new Refund { Id = "R2", LocationId = "L1", TenderId = "TND1", Reason = "duplicate", Status = "REJECTED", AmountMoney = new Money { Amount = 1000, Currency = "USD" } }
+                    new Refund { Id = "R1", LocationId = "L1", TenderId = "TND1", Reason = "damaged", Status = RefundStatus.Approved, AmountMoney = new Money { Amount = 2500, Currency = Currency.Usd } },
+                    new Refund { Id = "R2", LocationId = "L1", TenderId = "TND1", Reason = "duplicate", Status = RefundStatus.Rejected, AmountMoney = new Money { Amount = 1000, Currency = Currency.Usd } }
                 ]
             }
         });
@@ -83,10 +79,10 @@ public class SquareInventoryServiceTests
         await new SquareInventoryService(square).AdjustStockAsync("VAR1", "L1", 5, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), 1);
 
         var change = square.RequestBody<BatchChangeInventoryRequest>("POST /v2/inventory/changes/batch-create").Changes!.Single();
-        Assert.That(change.Type, Is.EqualTo("ADJUSTMENT"));
+        Assert.That(change.Type, Is.EqualTo(InventoryChangeType.Adjustment));
         Assert.That(change.Adjustment!.LocationId, Is.EqualTo("L1"));
-        Assert.That(change.Adjustment.FromState, Is.EqualTo("NONE"));
-        Assert.That(change.Adjustment.ToState, Is.EqualTo("IN_STOCK"));
+        Assert.That(change.Adjustment.FromState, Is.EqualTo(InventoryState.None));
+        Assert.That(change.Adjustment.ToState, Is.EqualTo(InventoryState.InStock));
         Assert.That(change.Adjustment.Quantity, Is.EqualTo("5"));
     }
 }
@@ -111,9 +107,8 @@ public class SquareCatalogServiceTests
 
         Assert.That(result, Is.EqualTo(new CatalogSyncResult("ITEM5", "VAR5")));
         var item = square.RequestBody<UpsertCatalogObjectRequest>("POST /v2/catalog/object").Object;
-        Assert.That(item.ItemData!.AvailableOnline, Is.True);
-        Assert.That(item.ItemData.ProductType, Is.EqualTo("REGULAR"));
-        Assert.That(item.ItemData.Variations!.Single().ItemVariationData!.PricingType, Is.EqualTo("FIXED_PRICING"));
+        Assert.That(item.ItemData.ProductType, Is.EqualTo(CatalogItemProductType.Regular));
+        Assert.That(item.ItemData.Variations!.Single().ItemVariationData!.PricingType, Is.EqualTo(CatalogPricingType.FixedPricing));
     }
 }
 
@@ -125,7 +120,7 @@ public class SquarePaymentManagerTests
     {
         var square = new StubSquare().Respond("POST /v2/payments", new CreatePaymentResponse
         {
-            Errors = [new Error { Category = "PAYMENT_METHOD_ERROR", Code = "CARD_DECLINED", Detail = "Authorization error" }]
+            Errors = [new Error { Category = ErrorCategory.PaymentMethodError, Code = ErrorCode.CardDeclined, Detail = "Authorization error" }]
         }, HttpStatusCode.PaymentRequired);
         var manager = new SquarePaymentManager(square, new Mock<ILogger>().Object, new Mock<ISettingService>().Object, new Mock<IWorkContext>().Object, null);
 
@@ -133,7 +128,7 @@ public class SquarePaymentManagerTests
         {
             SourceId = "cnon:card",
             IdempotencyKey = "key",
-            AmountMoney = new Money { Amount = 100, Currency = "USD" }
+            AmountMoney = new Money { Amount = 100, Currency = Currency.Usd }
         }, 1);
 
         Assert.That(payment, Is.Null);
