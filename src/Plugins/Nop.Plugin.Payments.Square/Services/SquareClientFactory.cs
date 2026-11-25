@@ -63,7 +63,7 @@ public class SquareClientFactory : ISquareClientFactory
         var options = new SquareClientOptions
         {
             BearerAuth = settings.AccessToken,
-            Environment = settings.UseSandbox ? ServerEnvironment.Environment2 : ServerEnvironment.Production,
+            Environment = settings.UseSandbox ? ServerEnvironment.Sandbox : ServerEnvironment.Production,
             Retry = RetryOptions.Default() with { Timeout = SquarePaymentDefaults.RequestTimeout },
             //set explicitly: an unset factory lets the SQUARE_LOG variable log request bodies (card nonces, addresses)
             Logging = new LoggingOptions { LoggerFactory = NullLoggerFactory.Instance },

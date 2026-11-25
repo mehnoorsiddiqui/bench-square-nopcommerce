@@ -1,5 +1,8 @@
 using Nop.Core;
+using System.Security.Cryptography;
+using System.Text;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Catalog;
 
 namespace Nop.Plugin.Payments.Square.Services;
@@ -37,6 +40,8 @@ public class SquareCatalogService
 {
     #region Fields
 
+    private const int MaxIdempotencyKeyLength = 128;
+
     private readonly ISquareClientFactory _squareClientFactory;
 
     #endregion
@@ -46,6 +51,17 @@ public class SquareCatalogService
     public SquareCatalogService(ISquareClientFactory squareClientFactory)
     {
         _squareClientFactory = squareClientFactory;
+    }
+
+    #endregion
+
+    #region Utilities
+
+    private static Currency ParseCurrency(string code)
+    {
+        return Currency.TryGetKnownValue(code, out var currency)
+            ? currency
+            : throw new NopException($"The {code} currency is not supported by Square");
     }
 
     #endregion
@@ -60,7 +76,13 @@ public class SquareCatalogService
     /// <returns>Idempotency key</returns>
     public static string BuildIdempotencyKey(CatalogProductInfo product)
     {
-        return $"nop:{product.StoreName}:{product.ProductId}:{product.Sku}:{product.VariationName}:{product.UpdatedOnUtc:yyyyMMddHHmmssfff}";
+        var key = $"nop:{product.StoreName}:{product.ProductId}:{product.Sku}:{product.VariationName}:{product.UpdatedOnUtc:yyyyMMddHHmmssfff}";
+
+        //Square accepts at most 128 characters; a longer key is replaced by its hash, which stays stable for the same update
+        if (key.Length <= MaxIdempotencyKeyLength)
+            return key;
+
+        return $"nop:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))}";
     }
 
     /// <summary>
@@ -85,28 +107,25 @@ public class SquareCatalogService
                 IdempotencyKey = BuildIdempotencyKey(product),
                 Object = new CatalogObject
                 {
-                    Type = "ITEM",
+                    Type = CatalogObjectType.Item,
                     Id = itemId,
                     ItemData = new CatalogItem
                     {
                         Name = product.Name,
-                        ProductType = "REGULAR",
-                        AvailableOnline = product.Published,
-                        AvailableForPickup = product.Published && !product.IsDownload,
-                        AvailableElectronically = product.IsDownload,
+                        ProductType = CatalogItemProductType.Regular,
                         Variations =
                         [
                             new CatalogObject
                             {
-                                Type = "ITEM_VARIATION",
+                                Type = CatalogObjectType.ItemVariation,
                                 Id = variationId,
                                 ItemVariationData = new CatalogItemVariation
                                 {
                                     ItemId = itemId,
                                     Name = product.VariationName,
                                     Sku = product.Sku,
-                                    PricingType = "FIXED_PRICING",
-                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = product.Currency },
+                                    PricingType = CatalogPricingType.FixedPricing,
+                                    PriceMoney = new Money { Amount = product.PriceAmount, Currency = ParseCurrency(product.Currency) },
                                     TrackInventory = true
                                 }
                             }
