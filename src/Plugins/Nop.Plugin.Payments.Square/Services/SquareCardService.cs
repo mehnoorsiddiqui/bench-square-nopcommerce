@@ -1,7 +1,7 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -21,6 +21,15 @@ public record SavedCardInfo(string Id, string Brand, string CardType, string Las
 /// </summary>
 public class SquareCardService
 {
+    #region Constants
+
+    /// <summary>
+    /// Most pages of saved cards read for one customer
+    /// </summary>
+    private const int MaxCardPages = 20;
+
+    #endregion
+
     #region Fields
 
     private readonly ISquareClientFactory _squareClientFactory;
@@ -40,25 +49,28 @@ public class SquareCardService
 
     private static SavedCardInfo ToSavedCard(Card card)
     {
-        var brand = card.CardBrand switch
+        //brand and type are open enums: compare with their declared values, anything else gets the generic name
+        var cardBrand = card.CardBrand;
+        var brand = cardBrand switch
         {
-            "VISA" => "Visa",
-            "MASTERCARD" => "Mastercard",
-            "AMERICAN_EXPRESS" => "American Express",
-            "DISCOVER" => "Discover",
-            "DISCOVER_DINERS" => "Diners Club",
-            "JCB" => "JCB",
-            "CHINA_UNIONPAY" => "UnionPay",
-            "SQUARE_GIFT_CARD" => "Square Gift Card",
-            "INTERAC" => "Interac",
-            "EFTPOS" => "EFTPOS",
+            _ when cardBrand == CardBrand.Visa => "Visa",
+            _ when cardBrand == CardBrand.Mastercard => "Mastercard",
+            _ when cardBrand == CardBrand.AmericanExpress => "American Express",
+            _ when cardBrand == CardBrand.Discover => "Discover",
+            _ when cardBrand == CardBrand.DiscoverDiners => "Diners Club",
+            _ when cardBrand == CardBrand.Jcb => "JCB",
+            _ when cardBrand == CardBrand.ChinaUnionpay => "UnionPay",
+            _ when cardBrand == CardBrand.SquareGiftCard => "Square Gift Card",
+            _ when cardBrand == CardBrand.Interac => "Interac",
+            _ when cardBrand == CardBrand.Eftpos => "EFTPOS",
             _ => "Card"
         };
 
-        var cardType = card.CardType switch
+        var type = card.CardType;
+        var cardType = type switch
         {
-            "CREDIT" => "Credit",
-            "DEBIT" => "Debit",
+            _ when type == CardType.Credit => "Credit",
+            _ when type == CardType.Debit => "Debit",
             _ => null
         };
 
@@ -80,13 +92,31 @@ public class SquareCardService
         if (string.IsNullOrEmpty(squareCustomerId))
             return new List<SavedCardInfo>();
 
+        //the customer's cards are listed by the Cards API (enabled cards only, by default), a page at a time
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
+        var cards = new List<Card>();
+        string cursor = null;
+        for (var page = 1; ; page++)
+        {
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+            SquareResponse.ThrowIfErrors(response.Errors);
 
-        return (response.Customer?.Cards ?? [])
+            cards.AddRange(response.Cards ?? []);
+
+            //an empty cursor marks the final page
+            if (string.IsNullOrEmpty(response.Cursor))
+                break;
+
+            //never walk pages without bound: a cursor that does not advance, or too many pages, is an error, not a short list
+            if (response.Cursor == cursor || page >= MaxCardPages)
+                throw new NopException($"The saved cards of customer {squareCustomerId} could not be read completely");
+
+            cursor = response.Cursor;
+        }
+
+        return cards
             .Where(card => card.Enabled != false)
             .Select(ToSavedCard)
             .ToList();

@@ -8,6 +8,7 @@ using Nop.Services.Logging;
 using Square.Core.ErrorResponse;
 using Square.Core.Exceptions;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
 using Square.Requests.Customers;
 using Square.Requests.Locations;
@@ -128,15 +129,20 @@ public class SquarePaymentManager
     /// </summary>
     private static string DescribeError(Error error)
     {
-        return error.Code switch
-        {
-            "CARD_DECLINED" or "GENERIC_DECLINE" => "The card was declined. Please use a different card.",
-            "INSUFFICIENT_FUNDS" => "The card has insufficient funds.",
-            "CVV_FAILURE" => "The card security code (CVV) is incorrect.",
-            "ADDRESS_VERIFICATION_FAILURE" => "The postal code does not match the card.",
-            "INVALID_EXPIRATION" or "CARD_EXPIRED" => "The card has expired or its expiration date is invalid.",
-            _ => error.Detail
-        };
+        //the code is an open enum: compare with its declared values, anything else keeps Square's detail
+        var code = error.Code;
+        if (code == ErrorCode.CardDeclined || code == ErrorCode.GenericDecline)
+            return "The card was declined. Please use a different card.";
+        if (code == ErrorCode.InsufficientFunds)
+            return "The card has insufficient funds.";
+        if (code == ErrorCode.CvvFailure)
+            return "The card security code (CVV) is incorrect.";
+        if (code == ErrorCode.AddressVerificationFailure)
+            return "The postal code does not match the card.";
+        if (code == ErrorCode.InvalidExpiration || code == ErrorCode.CardExpired)
+            return "The card has expired or its expiration date is invalid.";
+
+        return error.Detail;
     }
 
     /// <summary>
@@ -182,8 +188,8 @@ public class SquarePaymentManager
 
         //an inactive location is a valid answer from Square, not a failure
         if (location == null
-            || location.Status != SquarePaymentDefaults.Status.LOCATION_ACTIVE
-            || (!location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? true))
+            || location.Status != LocationStatus.Active
+            || (!location.Capabilities?.Contains(LocationCapability.CreditCardProcessing) ?? true))
         {
             await _logger.WarningAsync("Square payment warning: There are no selected active location for the account",
                 customer: await _workContext.GetCurrentCustomerAsync());
@@ -225,8 +231,8 @@ public class SquarePaymentManager
 
         //filter active locations and locations that can process credit cards
         var activeLocations = locations
-            ?.Where(location => location?.Status == SquarePaymentDefaults.Status.LOCATION_ACTIVE &&
-                (location.Capabilities?.Contains(SquarePaymentDefaults.Status.LOCATION_PROCESSING) ?? false))
+            ?.Where(location => location?.Status == LocationStatus.Active &&
+                (location.Capabilities?.Contains(LocationCapability.CreditCardProcessing) ?? false))
             .ToList() ?? new List<Location>();
 
         //an account with no usable location is a valid answer from Square, not a failure
