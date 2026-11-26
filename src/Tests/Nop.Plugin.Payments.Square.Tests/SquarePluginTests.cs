@@ -61,6 +61,30 @@ public class LegacyTransactionServiceTests
     }
 
     [Test]
+    public async Task RefundableBalance_SubtractsRefundsThatDoNotNameTheirTender()
+    {
+        //a refund without "tender_id" (optional since ApimaticBench.Square 4.0.0) still returned money from the transaction
+        var square = new StubSquare().Respond("GET /v2/locations/L1/transactions/T1", new RetrieveTransactionResponse
+        {
+            Transaction = new Transaction
+            {
+                Id = "T1",
+                LocationId = "L1",
+                Tenders = [new Tender { Id = "TND1", Type = TenderType.Card, AmountMoney = new Money { Amount = 10000, Currency = Currency.Usd } }],
+                Refunds =
+                [
+                    new Refund { Id = "R1", LocationId = "L1", TenderId = "TND1", Reason = "damaged", Status = RefundStatus.Approved, AmountMoney = new Money { Amount = 2500, Currency = Currency.Usd } },
+                    new Refund { Id = "R2", LocationId = "L1", Reason = "returned", Status = RefundStatus.Pending, AmountMoney = new Money { Amount = 4000, Currency = Currency.Usd } }
+                ]
+            }
+        });
+
+        var balances = await new LegacyTransactionService(square).GetRefundableBalancesAsync(new LegacyTransactionReference("L1", "T1"), 1);
+
+        Assert.That(balances.Single().Refundable, Is.EqualTo(3500));
+    }
+
+    [Test]
     public void Reference_RoundTrips()
     {
         Assert.That(LegacyTransactionReference.TryParse("legacy:L1:T1", out var reference), Is.True);
