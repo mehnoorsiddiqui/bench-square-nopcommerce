@@ -149,6 +149,11 @@ public class LegacyTransactionService
         var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
         var refunds = transaction.Refunds ?? [];
 
+        //a refund's tender is optional; an active refund that names none cannot be counted against a tender,
+        //so the balances would be overstated: refuse rather than allow a refund beyond what is left
+        if (refunds.Any(refund => string.IsNullOrEmpty(refund.TenderId) && IsActiveRefund(refund)))
+            throw new NopException($"Transaction {reference.TransactionId} has a refund that does not name its tender, so its refundable amount cannot be determined");
+
         return (transaction.Tenders ?? [])
             .Select(tender =>
             {
