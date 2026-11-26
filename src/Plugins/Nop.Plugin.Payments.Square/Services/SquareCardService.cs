@@ -1,7 +1,7 @@
 using Nop.Core;
 using Square.Models;
+using Square.Models.Enums;
 using Square.Requests.Cards;
-using Square.Requests.Customers;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -42,23 +42,23 @@ public class SquareCardService
     {
         var brand = card.CardBrand switch
         {
-            "VISA" => "Visa",
-            "MASTERCARD" => "Mastercard",
-            "AMERICAN_EXPRESS" => "American Express",
-            "DISCOVER" => "Discover",
-            "DISCOVER_DINERS" => "Diners Club",
-            "JCB" => "JCB",
-            "CHINA_UNIONPAY" => "UnionPay",
-            "SQUARE_GIFT_CARD" => "Square Gift Card",
-            "INTERAC" => "Interac",
-            "EFTPOS" => "EFTPOS",
+            _ when card.CardBrand == CardBrand.Visa => "Visa",
+            _ when card.CardBrand == CardBrand.Mastercard => "Mastercard",
+            _ when card.CardBrand == CardBrand.AmericanExpress => "American Express",
+            _ when card.CardBrand == CardBrand.Discover => "Discover",
+            _ when card.CardBrand == CardBrand.DiscoverDiners => "Diners Club",
+            _ when card.CardBrand == CardBrand.Jcb => "JCB",
+            _ when card.CardBrand == CardBrand.ChinaUnionpay => "UnionPay",
+            _ when card.CardBrand == CardBrand.SquareGiftCard => "Square Gift Card",
+            _ when card.CardBrand == CardBrand.Interac => "Interac",
+            _ when card.CardBrand == CardBrand.Eftpos => "EFTPOS",
             _ => "Card"
         };
 
         var cardType = card.CardType switch
         {
-            "CREDIT" => "Credit",
-            "DEBIT" => "Debit",
+            _ when card.CardType == CardType.Credit => "Credit",
+            _ when card.CardType == CardType.Debit => "Debit",
             _ => null
         };
 
@@ -81,15 +81,25 @@ public class SquareCardService
             return new List<SavedCardInfo>();
 
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Customers.RetrieveCustomer(new RetrieveCustomerRequest { CustomerId = squareCustomerId })
-            ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+        //Customer no longer carries its cards: list them, page by page (disabled cards are excluded by default)
+        var savedCards = new List<SavedCardInfo>();
+        string cursor = null;
+        do
+        {
+            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+                ?? throw new NopException("No service response");
 
-        return (response.Customer?.Cards ?? [])
-            .Where(card => card.Enabled != false)
-            .Select(ToSavedCard)
-            .ToList();
+            SquareResponse.ThrowIfErrors(response.Errors);
+
+            savedCards.AddRange((response.Cards ?? [])
+                .Where(card => card.Enabled != false)
+                .Select(ToSavedCard));
+
+            cursor = string.IsNullOrEmpty(response.Cursor) ? null : response.Cursor;
+        } while (cursor != null);
+
+        return savedCards;
     }
 
     /// <summary>
