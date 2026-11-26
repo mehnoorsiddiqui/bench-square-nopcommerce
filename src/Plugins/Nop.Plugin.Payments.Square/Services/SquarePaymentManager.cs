@@ -129,15 +129,17 @@ public class SquarePaymentManager
     /// </summary>
     private static string DescribeError(Error error)
     {
-        if (error.Code == ErrorCode.CardDeclined || error.Code == ErrorCode.GenericDecline)
+        if (error.Code == ErrorCode.CardDeclined || error.Code == ErrorCode.GenericDecline
+            || error.Code == ErrorCode.CardDeclinedCallIssuer || error.Code == ErrorCode.CardDeclinedVerificationRequired)
             return "The card was declined. Please use a different card.";
         if (error.Code == ErrorCode.InsufficientFunds)
             return "The card has insufficient funds.";
-        if (error.Code == ErrorCode.CvvFailure)
+        if (error.Code == ErrorCode.CvvFailure || error.Code == ErrorCode.VerifyCvvFailure)
             return "The card security code (CVV) is incorrect.";
         if (error.Code == ErrorCode.AddressVerificationFailure)
             return "The postal code does not match the card.";
-        if (error.Code == ErrorCode.InvalidExpiration || error.Code == ErrorCode.CardExpired)
+        if (error.Code == ErrorCode.InvalidExpiration || error.Code == ErrorCode.InvalidExpirationYear
+            || error.Code == ErrorCode.InvalidExpirationDate || error.Code == ErrorCode.CardExpired)
             return "The card has expired or its expiration date is invalid.";
 
         return error.Detail;
