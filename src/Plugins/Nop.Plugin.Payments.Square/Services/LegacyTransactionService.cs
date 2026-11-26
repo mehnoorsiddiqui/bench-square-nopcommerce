@@ -153,8 +153,9 @@ public class LegacyTransactionService
             .Select(tender =>
             {
                 var paid = tender.AmountMoney?.Amount ?? 0;
+                //a refund that names no tender cannot be placed, so it counts against every tender (never refund more than is left)
                 var refunded = refunds
-                    .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
+                    .Where(refund => (refund.TenderId == null || refund.TenderId == tender.Id) && IsActiveRefund(refund))
                     .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
                 return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
