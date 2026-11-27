@@ -61,6 +61,32 @@ public class LegacyTransactionServiceTests
     }
 
     [Test]
+    public async Task RefundableBalance_SubtractsRefundsWithoutTender()
+    {
+        var square = new StubSquare().Respond("GET /v2/locations/L1/transactions/T1", new RetrieveTransactionResponse
+        {
+            Transaction = new Transaction
+            {
+                Id = "T1",
+                LocationId = "L1",
+                Tenders = [new Tender { Id = "TND1", Type = TenderType.Card, AmountMoney = new Money { Amount = 10000, Currency = Currency.Usd } }],
+                Refunds =
+                [
+                    new Refund { Id = "R1", LocationId = "L1", TenderId = "TND1", Reason = "damaged", Status = RefundStatus.Approved, AmountMoney = new Money { Amount = 2500, Currency = Currency.Usd } },
+                    new Refund { Id = "R2", LocationId = "L1", Reason = "goodwill", Status = RefundStatus.Pending, AmountMoney = new Money { Amount = 1500, Currency = Currency.Usd } }
+                ]
+            }
+        });
+
+        var service = new LegacyTransactionService(square);
+        var balances = await service.GetRefundableBalancesAsync(new LegacyTransactionReference("L1", "T1"), 1);
+
+        Assert.That(balances.Single().Refundable, Is.EqualTo(6000));
+        //a refund over what is left is refused before Square is asked
+        Assert.ThrowsAsync<NopException>(() => service.RefundAsync(new LegacyTransactionReference("L1", "T1"), 7000, "USD", 1));
+    }
+
+    [Test]
     public void Reference_RoundTrips()
     {
         Assert.That(LegacyTransactionReference.TryParse("legacy:L1:T1", out var reference), Is.True);
