@@ -149,17 +149,31 @@ public class LegacyTransactionService
         var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
         var refunds = transaction.Refunds ?? [];
 
-        return (transaction.Tenders ?? [])
-            .Select(tender =>
-            {
-                var paid = tender.AmountMoney?.Amount ?? 0;
-                var refunded = refunds
-                    .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
-                    .Sum(refund => refund.AmountMoney.Amount ?? 0);
+        var tenders = transaction.Tenders ?? [];
+        var activeRefunds = refunds.Where(IsActiveRefund).ToList();
 
-                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
-            })
-            .ToList();
+        //a refund may come back without its tender; it still returned money, so it is attributed
+        //to the tenders in order, after the refunds that name their tender
+        var unattributed = activeRefunds
+            .Where(refund => string.IsNullOrEmpty(refund.TenderId) || tenders.All(tender => tender.Id != refund.TenderId))
+            .Sum(refund => refund.AmountMoney.Amount ?? 0);
+
+        var balances = new List<LegacyTenderBalance>();
+        foreach (var tender in tenders)
+        {
+            var paid = tender.AmountMoney?.Amount ?? 0;
+            var refunded = activeRefunds
+                .Where(refund => refund.TenderId == tender.Id)
+                .Sum(refund => refund.AmountMoney.Amount ?? 0);
+
+            var extra = Math.Min(unattributed, Math.Max(paid - refunded, 0));
+            unattributed -= extra;
+            refunded += extra;
+
+            balances.Add(new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded));
+        }
+
+        return balances;
     }
 
     /// <summary>
