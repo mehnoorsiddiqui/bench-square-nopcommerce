@@ -149,12 +149,19 @@ public class LegacyTransactionService
         var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
         var refunds = transaction.Refunds ?? [];
 
+        //a refund can come back without its tender; it still returned money, so it must not drop out of the balance:
+        //it is held against every tender (the single tender it must belong to, or an upper bound when there are several),
+        //so a refund is never requested beyond what is left
+        var unattributed = refunds
+            .Where(refund => string.IsNullOrEmpty(refund.TenderId) && IsActiveRefund(refund))
+            .Sum(refund => refund.AmountMoney.Amount ?? 0);
+
         return (transaction.Tenders ?? [])
             .Select(tender =>
             {
                 var paid = tender.AmountMoney?.Amount ?? 0;
-                var refunded = refunds
-                    .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
+                var refunded = unattributed + refunds
+                    .Where(refund => !string.IsNullOrEmpty(refund.TenderId) && refund.TenderId == tender.Id && IsActiveRefund(refund))
                     .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
                 return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
