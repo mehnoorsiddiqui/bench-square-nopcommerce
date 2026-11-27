@@ -154,7 +154,9 @@ public class LegacyTransactionService
             {
                 var paid = tender.AmountMoney?.Amount ?? 0;
                 var refunded = refunds
-                    .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
+                    //a refund without a tender id still returned money; its tender is unknown, so it counts against
+                    //every tender (exact for a single tender, never over-refunds for several)
+                    .Where(refund => (refund.TenderId is null || refund.TenderId == tender.Id) && IsActiveRefund(refund))
                     .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
                 return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
