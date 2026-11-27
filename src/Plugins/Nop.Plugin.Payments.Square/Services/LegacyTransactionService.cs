@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using Nop.Core;
 using Square.Models;
 using Square.Models.Enums;
+using Square.Requests.Payments;
 using Square.Requests.Refunds;
 using Square.Requests.Transactions;
 
@@ -83,6 +84,31 @@ public class LegacyTransactionService
         return refund.Status == RefundStatus.Pending || refund.Status == RefundStatus.Approved;
     }
 
+    /// <summary>
+    /// Gets the identifiers of the payments behind the tenders of a legacy transaction
+    /// (a legacy tender's identifier is the identifier of its payment in the Payments API)
+    /// </summary>
+    private async Task<IList<string>> GetPaymentIdsAsync(global::Square.SquareClient client, LegacyTransactionReference reference)
+    {
+        var response = await client.Transactions.RetrieveTransaction(new RetrieveTransactionRequest
+        {
+            LocationId = reference.LocationId,
+            TransactionId = reference.TransactionId
+        }) ?? throw new NopException("No service response");
+
+        SquareResponse.ThrowIfErrors(response.Errors);
+
+        var paymentIds = (response.Transaction?.Tenders ?? [])
+            .Select(tender => tender.Id)
+            .Where(id => !string.IsNullOrEmpty(id))
+            .ToList();
+
+        if (!paymentIds.Any())
+            throw new NopException($"Transaction {reference.TransactionId} has no tender");
+
+        return paymentIds;
+    }
+
     #endregion
 
     #region Methods
@@ -98,13 +124,18 @@ public class LegacyTransactionService
         ArgumentNullException.ThrowIfNull(reference);
 
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.CaptureTransaction(new CaptureTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+        //the Transactions API no longer captures: complete the payment of each tender
+        foreach (var paymentId in await GetPaymentIdsAsync(client, reference))
+        {
+            var response = await client.Payments.CompletePayment(new CompletePaymentOperationRequest
+            {
+                PaymentId = paymentId,
+                Body = new CompletePaymentRequest()
+            }) ?? throw new NopException("No service response");
+
+            SquareResponse.ThrowIfErrors(response.Errors);
+        }
     }
 
     /// <summary>
@@ -118,13 +149,15 @@ public class LegacyTransactionService
         ArgumentNullException.ThrowIfNull(reference);
 
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.VoidTransaction(new VoidTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+        //the Transactions API no longer voids: cancel the payment of each tender
+        foreach (var paymentId in await GetPaymentIdsAsync(client, reference))
+        {
+            var response = await client.Payments.CancelPayment(new CancelPaymentRequest { PaymentId = paymentId })
+                ?? throw new NopException("No service response");
+
+            SquareResponse.ThrowIfErrors(response.Errors);
+        }
     }
 
     /// <summary>
@@ -149,12 +182,20 @@ public class LegacyTransactionService
         var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
         var refunds = transaction.Refunds ?? [];
 
-        return (transaction.Tenders ?? [])
+        var tenders = transaction.Tenders ?? [];
+
+        //a refund without a tender still returned money: with one tender it belongs to that tender,
+        //with several there is no telling which one it came out of, so no safe balance exists
+        var hasUnattributedRefund = refunds.Any(refund => string.IsNullOrEmpty(refund.TenderId) && IsActiveRefund(refund));
+        if (hasUnattributedRefund && tenders.Count > 1)
+            throw new NopException($"Transaction {reference.TransactionId} has refunds that are not tied to a tender, so the refundable amount cannot be determined");
+
+        return tenders
             .Select(tender =>
             {
                 var paid = tender.AmountMoney?.Amount ?? 0;
                 var refunded = refunds
-                    .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
+                    .Where(refund => (refund.TenderId == tender.Id || string.IsNullOrEmpty(refund.TenderId)) && IsActiveRefund(refund))
                     .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
                 return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
