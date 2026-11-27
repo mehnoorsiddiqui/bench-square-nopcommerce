@@ -81,7 +81,8 @@ public class SquareInventoryService
             Adjustment = new InventoryAdjustment
             {
                 CatalogObjectId = catalogObjectId,
-                LocationId = locationId,
+                FromLocationId = locationId,
+                ToLocationId = locationId,
                 FromState = quantityDelta > 0 ? InventoryState.None : InventoryState.InStock,
                 ToState = quantityDelta > 0 ? InventoryState.InStock : InventoryState.Sold,
                 Quantity = FormatQuantity(Math.Abs(quantityDelta)),
@@ -108,29 +109,31 @@ public class SquareInventoryService
 
         var response = await ChangeInventoryAsync(new InventoryChange
         {
-            Type = InventoryChangeType.Transfer,
-            Transfer = new InventoryTransfer
+            Type = InventoryChangeType.Adjustment,
+            Adjustment = new InventoryAdjustment
             {
                 CatalogObjectId = catalogObjectId,
                 FromLocationId = fromLocationId,
                 ToLocationId = toLocationId,
-                State = InventoryState.InStock,
+                FromState = InventoryState.InStock,
+                ToState = InventoryState.InStock,
                 Quantity = FormatQuantity(quantity),
                 OccurredAt = FormatTime(occurredAtUtc)
             }
         }, storeId);
 
-        var transferId = response.Changes?.FirstOrDefault(change => change.Transfer != null)?.Transfer?.Id
+        //a transfer between locations is an adjustment with a source and a destination location
+        var transferId = response.Changes?.FirstOrDefault(change => change.Adjustment != null)?.Adjustment?.Id
             ?? throw new NopException("Square did not report the transfer");
 
         //read the transfer back: it is complete once the stock is in stock at the destination
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var transferResponse = await client.Inventory.RetrieveInventoryTransfer(new RetrieveInventoryTransferRequest { TransferId = transferId })
+        var transferResponse = await client.Inventory.RetrieveInventoryAdjustment(new RetrieveInventoryAdjustmentRequest { AdjustmentId = transferId })
             ?? throw new NopException("No service response");
 
         SquareResponse.ThrowIfErrors(transferResponse.Errors);
 
-        var state = transferResponse.Transfer?.State;
+        var state = transferResponse.Adjustment?.ToState;
         bool completed;
         if (state == InventoryState.InStock)
             completed = true;
