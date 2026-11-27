@@ -149,6 +149,12 @@ public class LegacyTransactionService
         var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
         var refunds = transaction.Refunds ?? [];
 
+        //a refund may not name its tender; it still returned money from this transaction, from a tender we cannot tell,
+        //so it counts against every tender: exact for a single-tender transaction, and never more than is really left otherwise
+        var unattributedRefunded = refunds
+            .Where(refund => string.IsNullOrEmpty(refund.TenderId) && IsActiveRefund(refund))
+            .Sum(refund => refund.AmountMoney.Amount ?? 0);
+
         return (transaction.Tenders ?? [])
             .Select(tender =>
             {
@@ -157,7 +163,11 @@ public class LegacyTransactionService
                     .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
                     .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
-                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
+                var refundable = paid - refunded;
+                if (unattributedRefunded > 0)
+                    refundable = Math.Max(refundable - unattributedRefunded, 0);
+
+                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, refundable);
             })
             .ToList();
     }
