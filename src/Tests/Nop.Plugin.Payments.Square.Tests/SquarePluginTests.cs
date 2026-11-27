@@ -61,6 +61,26 @@ public class LegacyTransactionServiceTests
     }
 
     [Test]
+    public async Task Capture_CompletesEachTenderPayment()
+    {
+        var square = new StubSquare()
+            .Respond("GET /v2/locations/L1/transactions/T1", new RetrieveTransactionResponse
+            {
+                Transaction = new Transaction
+                {
+                    Id = "T1",
+                    LocationId = "L1",
+                    Tenders = [new Tender { Id = "TND1", Type = TenderType.Card, AmountMoney = new Money { Amount = 10000, Currency = Currency.Usd } }]
+                }
+            })
+            .Respond("POST /v2/payments/TND1/complete", new CompletePaymentResponse());
+
+        await new LegacyTransactionService(square).CaptureAsync(new LegacyTransactionReference("L1", "T1"), 1);
+
+        Assert.That(square.RequestBodies.ContainsKey("POST /v2/payments/TND1/complete"), Is.True);
+    }
+
+    [Test]
     public void Reference_RoundTrips()
     {
         Assert.That(LegacyTransactionReference.TryParse("legacy:L1:T1", out var reference), Is.True);
@@ -81,10 +101,39 @@ public class SquareInventoryServiceTests
 
         var change = square.RequestBody<BatchChangeInventoryRequest>("POST /v2/inventory/changes/batch-create").Changes!.Single();
         Assert.That(change.Type, Is.EqualTo(InventoryChangeType.Adjustment));
-        Assert.That(change.Adjustment!.LocationId, Is.EqualTo("L1"));
+        Assert.That(change.Adjustment!.FromLocationId, Is.EqualTo("L1"));
+        Assert.That(change.Adjustment.ToLocationId, Is.EqualTo("L1"));
         Assert.That(change.Adjustment.FromState, Is.EqualTo(InventoryState.None));
         Assert.That(change.Adjustment.ToState, Is.EqualTo(InventoryState.InStock));
         Assert.That(change.Adjustment.Quantity, Is.EqualTo("5"));
+    }
+
+    [Test]
+    public async Task MoveStock_CreatesStartsAndReceivesATransferOrder()
+    {
+        TransferOrder order(TransferOrderStatus status, long version) => new()
+        {
+            Id = "TO1",
+            Status = status,
+            Version = version,
+            LineItems = [new TransferOrderLine { Uid = "LINE1", ItemVariationId = "VAR1", QuantityOrdered = "3" }]
+        };
+        var square = new StubSquare()
+            .Respond("POST /v2/transfer-orders", new CreateTransferOrderResponse { TransferOrder = order(TransferOrderStatus.Draft, 1) })
+            .Respond("POST /v2/transfer-orders/TO1/start", new StartTransferOrderResponse { TransferOrder = order(TransferOrderStatus.Started, 2) })
+            .Respond("POST /v2/transfer-orders/TO1/receive", new ReceiveTransferOrderResponse { TransferOrder = order(TransferOrderStatus.Completed, 3) });
+
+        var result = await new SquareInventoryService(square).MoveStockAsync("VAR1", "L1", "L2", 3, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), 1);
+
+        Assert.That(result, Is.EqualTo(new StockMoveResult("TO1", true)));
+        var created = square.RequestBody<CreateTransferOrderRequest>("POST /v2/transfer-orders").TransferOrder;
+        Assert.That(created.SourceLocationId, Is.EqualTo("L1"));
+        Assert.That(created.DestinationLocationId, Is.EqualTo("L2"));
+        Assert.That(created.LineItems!.Single().QuantityOrdered, Is.EqualTo("3"));
+        var receipt = square.RequestBody<ReceiveTransferOrderRequest>("POST /v2/transfer-orders/TO1/receive");
+        Assert.That(receipt.Version, Is.EqualTo(2));
+        Assert.That(receipt.Receipt.LineItems!.Single().TransferOrderLineUid, Is.EqualTo("LINE1"));
+        Assert.That(receipt.Receipt.LineItems!.Single().QuantityReceived, Is.EqualTo("3"));
     }
 }
 
