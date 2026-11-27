@@ -149,16 +149,28 @@ public class LegacyTransactionService
         var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
         var refunds = transaction.Refunds ?? [];
 
-        return (transaction.Tenders ?? [])
-            .Select(tender =>
-            {
-                var paid = tender.AmountMoney?.Amount ?? 0;
-                var refunded = refunds
-                    .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
-                    .Sum(refund => refund.AmountMoney.Amount ?? 0);
+        var tenders = (transaction.Tenders ?? []).ToList();
+        var paidByTender = tenders.Select(tender => tender.AmountMoney?.Amount ?? 0).ToList();
+        var refundedByTender = tenders
+            .Select(tender => refunds
+                .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
+                .Sum(refund => refund.AmountMoney.Amount ?? 0))
+            .ToList();
 
-                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
-            })
+        //a refund that names no tender still returned money: take it off the tenders in order, so the balances
+        //never promise more than is left
+        var unassigned = refunds
+            .Where(refund => string.IsNullOrEmpty(refund.TenderId) && IsActiveRefund(refund))
+            .Sum(refund => refund.AmountMoney.Amount ?? 0);
+        for (var i = 0; i < tenders.Count && unassigned > 0; i++)
+        {
+            var take = Math.Min(unassigned, Math.Max(0, paidByTender[i] - refundedByTender[i]));
+            refundedByTender[i] += take;
+            unassigned -= take;
+        }
+
+        return tenders
+            .Select((tender, i) => new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paidByTender[i], paidByTender[i] - refundedByTender[i]))
             .ToList();
     }
 
