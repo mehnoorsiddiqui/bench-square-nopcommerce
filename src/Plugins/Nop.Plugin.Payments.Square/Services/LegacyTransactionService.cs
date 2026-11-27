@@ -54,7 +54,7 @@ public record LegacyTransactionReference(string LocationId, string TransactionId
 public record LegacyTenderBalance(string TenderId, string Currency, long Paid, long Refundable);
 
 /// <summary>
-/// Captures, voids and refunds orders paid with Square's legacy Transactions API
+/// Refunds orders paid with Square's legacy Transactions API (capturing and voiding them is no longer supported by Square)
 /// </summary>
 public class LegacyTransactionService
 {
@@ -90,41 +90,37 @@ public class LegacyTransactionService
     /// <summary>
     /// Captures a legacy transaction created with delayed capture
     /// </summary>
+    /// <remarks>
+    /// Square SDK 5.0.0 no longer offers the Transactions API's CaptureTransaction endpoint and names no replacement,
+    /// so a legacy transaction can no longer be captured from the store.
+    /// </remarks>
     /// <param name="reference">Legacy transaction reference</param>
     /// <param name="storeId">Store identifier</param>
     /// <returns>A task that represents the asynchronous operation</returns>
-    public async Task CaptureAsync(LegacyTransactionReference reference, int storeId)
+    /// <exception cref="NopException">Always: capturing a legacy transaction is no longer supported</exception>
+    public Task CaptureAsync(LegacyTransactionReference reference, int storeId)
     {
         ArgumentNullException.ThrowIfNull(reference);
 
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.CaptureTransaction(new CaptureTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(response.Errors);
+        throw new NopException($"Legacy transaction {reference.TransactionId} cannot be captured: Square no longer supports capturing transactions of the legacy Transactions API");
     }
 
     /// <summary>
     /// Voids a legacy transaction created with delayed capture
     /// </summary>
+    /// <remarks>
+    /// Square SDK 5.0.0 no longer offers the Transactions API's VoidTransaction endpoint and names no replacement,
+    /// so a legacy transaction can no longer be voided from the store.
+    /// </remarks>
     /// <param name="reference">Legacy transaction reference</param>
     /// <param name="storeId">Store identifier</param>
     /// <returns>A task that represents the asynchronous operation</returns>
-    public async Task VoidAsync(LegacyTransactionReference reference, int storeId)
+    /// <exception cref="NopException">Always: voiding a legacy transaction is no longer supported</exception>
+    public Task VoidAsync(LegacyTransactionReference reference, int storeId)
     {
         ArgumentNullException.ThrowIfNull(reference);
 
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.VoidTransaction(new VoidTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(response.Errors);
+        throw new NopException($"Legacy transaction {reference.TransactionId} cannot be voided: Square no longer supports voiding transactions of the legacy Transactions API");
     }
 
     /// <summary>
