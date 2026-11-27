@@ -61,6 +61,36 @@ public class LegacyTransactionServiceTests
     }
 
     [Test]
+    public async Task RefundableBalance_SubtractsRefundsWithoutTender()
+    {
+        var square = new StubSquare().Respond("GET /v2/locations/L1/transactions/T1", new RetrieveTransactionResponse
+        {
+            Transaction = new Transaction
+            {
+                Id = "T1",
+                LocationId = "L1",
+                Tenders =
+                [
+                    new Tender { Id = "TND1", Type = TenderType.Card, AmountMoney = new Money { Amount = 6000, Currency = Currency.Usd } },
+                    new Tender { Id = "TND2", Type = TenderType.Card, AmountMoney = new Money { Amount = 4000, Currency = Currency.Usd } }
+                ],
+                Refunds =
+                [
+                    new Refund { Id = "R1", LocationId = "L1", TenderId = "TND1", Reason = "damaged", Status = RefundStatus.Approved, AmountMoney = new Money { Amount = 1000, Currency = Currency.Usd } },
+                    //no tender_id: refunded from the transaction, tender unknown
+                    new Refund { Id = "R2", LocationId = "L1", Reason = "late", Status = RefundStatus.Approved, AmountMoney = new Money { Amount = 6000, Currency = Currency.Usd } }
+                ]
+            }
+        });
+
+        var balances = await new LegacyTransactionService(square).GetRefundableBalancesAsync(new LegacyTransactionReference("L1", "T1"), 1);
+
+        //10000 paid, 7000 refunded: 3000 is left on the transaction, and no tender can be refunded beyond it
+        Assert.That(balances.Single(balance => balance.TenderId == "TND1").Refundable, Is.EqualTo(3000));
+        Assert.That(balances.Single(balance => balance.TenderId == "TND2").Refundable, Is.EqualTo(3000));
+    }
+
+    [Test]
     public void Reference_RoundTrips()
     {
         Assert.That(LegacyTransactionReference.TryParse("legacy:L1:T1", out var reference), Is.True);
