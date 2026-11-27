@@ -149,15 +149,25 @@ public class LegacyTransactionService
         var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
         var refunds = transaction.Refunds ?? [];
 
-        return (transaction.Tenders ?? [])
+        var tenders = (transaction.Tenders ?? []).ToList();
+        var activeRefunds = refunds.Where(IsActiveRefund).ToList();
+
+        //a refund may come without its tender: it still returned money, but from which tender is unknown,
+        //so it also bounds every tender through the transaction total (never refund more than is left)
+        var totalLeft = tenders.Sum(tender => tender.AmountMoney?.Amount ?? 0)
+            - activeRefunds.Sum(refund => refund.AmountMoney.Amount ?? 0);
+
+        return tenders
             .Select(tender =>
             {
                 var paid = tender.AmountMoney?.Amount ?? 0;
-                var refunded = refunds
-                    .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
+                var refunded = activeRefunds
+                    .Where(refund => refund.TenderId == tender.Id)
                     .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
-                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
+                var refundable = Math.Max(0, Math.Min(paid - refunded, totalLeft));
+
+                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, refundable);
             })
             .ToList();
     }
