@@ -90,41 +90,37 @@ public class LegacyTransactionService
     /// <summary>
     /// Captures a legacy transaction created with delayed capture
     /// </summary>
+    /// <remarks>
+    /// Square SDK 5.0.0 no longer offers the Transactions API capture endpoint and names no replacement,
+    /// so a legacy transaction can no longer be captured from the store
+    /// </remarks>
     /// <param name="reference">Legacy transaction reference</param>
     /// <param name="storeId">Store identifier</param>
     /// <returns>A task that represents the asynchronous operation</returns>
-    public async Task CaptureAsync(LegacyTransactionReference reference, int storeId)
+    /// <exception cref="NopException">Always: the operation is no longer available</exception>
+    public Task CaptureAsync(LegacyTransactionReference reference, int storeId)
     {
         ArgumentNullException.ThrowIfNull(reference);
 
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.CaptureTransaction(new CaptureTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(response.Errors);
+        throw new NopException($"Legacy transaction {reference.TransactionId} cannot be captured: Square no longer offers capturing Transactions API transactions. Capture it in the Square Dashboard.");
     }
 
     /// <summary>
     /// Voids a legacy transaction created with delayed capture
     /// </summary>
+    /// <remarks>
+    /// Square SDK 5.0.0 no longer offers the Transactions API void endpoint and names no replacement,
+    /// so a legacy transaction can no longer be voided from the store
+    /// </remarks>
     /// <param name="reference">Legacy transaction reference</param>
     /// <param name="storeId">Store identifier</param>
     /// <returns>A task that represents the asynchronous operation</returns>
-    public async Task VoidAsync(LegacyTransactionReference reference, int storeId)
+    /// <exception cref="NopException">Always: the operation is no longer available</exception>
+    public Task VoidAsync(LegacyTransactionReference reference, int storeId)
     {
         ArgumentNullException.ThrowIfNull(reference);
 
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.VoidTransaction(new VoidTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(response.Errors);
+        throw new NopException($"Legacy transaction {reference.TransactionId} cannot be voided: Square no longer offers voiding Transactions API transactions. Void it in the Square Dashboard.");
     }
 
     /// <summary>
@@ -147,17 +143,24 @@ public class LegacyTransactionService
         SquareResponse.ThrowIfErrors(response.Errors);
 
         var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
-        var refunds = transaction.Refunds ?? [];
+        var activeRefunds = (transaction.Refunds ?? []).Where(IsActiveRefund).ToList();
+
+        //a refund may not name its tender; it still came out of the transaction, possibly out of any tender,
+        //so it is counted against every tender, which never overstates what is left to refund
+        var unattributedRefunded = activeRefunds
+            .Where(refund => string.IsNullOrEmpty(refund.TenderId))
+            .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
         return (transaction.Tenders ?? [])
             .Select(tender =>
             {
                 var paid = tender.AmountMoney?.Amount ?? 0;
-                var refunded = refunds
-                    .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
+                var refunded = activeRefunds
+                    .Where(refund => !string.IsNullOrEmpty(refund.TenderId) && refund.TenderId == tender.Id)
                     .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
-                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
+                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid,
+                    Math.Max(0, paid - refunded - unattributedRefunded));
             })
             .ToList();
     }
