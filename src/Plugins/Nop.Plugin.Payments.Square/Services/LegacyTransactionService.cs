@@ -147,17 +147,23 @@ public class LegacyTransactionService
         SquareResponse.ThrowIfErrors(response.Errors);
 
         var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
-        var refunds = transaction.Refunds ?? [];
+        var activeRefunds = (transaction.Refunds ?? []).Where(IsActiveRefund).ToList();
+
+        //a refund may come back without the tender it was taken from; it still returned money from this transaction,
+        //so it is counted against every tender it may belong to, and the refundable amount is never overstated
+        var unattributedRefunded = activeRefunds
+            .Where(refund => string.IsNullOrEmpty(refund.TenderId))
+            .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
         return (transaction.Tenders ?? [])
             .Select(tender =>
             {
                 var paid = tender.AmountMoney?.Amount ?? 0;
-                var refunded = refunds
-                    .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
-                    .Sum(refund => refund.AmountMoney.Amount ?? 0);
+                var refunded = activeRefunds
+                    .Where(refund => !string.IsNullOrEmpty(refund.TenderId) && refund.TenderId == tender.Id)
+                    .Sum(refund => refund.AmountMoney.Amount ?? 0) + unattributedRefunded;
 
-                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
+                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, Math.Max(paid - refunded, 0));
             })
             .ToList();
     }
