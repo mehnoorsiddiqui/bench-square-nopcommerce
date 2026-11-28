@@ -81,7 +81,9 @@ public class SquareInventoryService
             Adjustment = new InventoryAdjustment
             {
                 CatalogObjectId = catalogObjectId,
-                LocationId = locationId,
+                //the location is where the stock is tracked before (a sale) or after (a receipt) the adjustment
+                FromLocationId = quantityDelta > 0 ? null : locationId,
+                ToLocationId = quantityDelta > 0 ? locationId : null,
                 FromState = quantityDelta > 0 ? InventoryState.None : InventoryState.InStock,
                 ToState = quantityDelta > 0 ? InventoryState.InStock : InventoryState.Sold,
                 Quantity = FormatQuantity(Math.Abs(quantityDelta)),
@@ -108,29 +110,25 @@ public class SquareInventoryService
 
         var response = await ChangeInventoryAsync(new InventoryChange
         {
-            Type = InventoryChangeType.Transfer,
-            Transfer = new InventoryTransfer
+            Type = InventoryChangeType.Adjustment,
+            Adjustment = new InventoryAdjustment
             {
                 CatalogObjectId = catalogObjectId,
                 FromLocationId = fromLocationId,
                 ToLocationId = toLocationId,
-                State = InventoryState.InStock,
+                FromState = InventoryState.InStock,
+                ToState = InventoryState.InStock,
                 Quantity = FormatQuantity(quantity),
                 OccurredAt = FormatTime(occurredAtUtc)
             }
         }, storeId);
 
-        var transferId = response.Changes?.FirstOrDefault(change => change.Transfer != null)?.Transfer?.Id
+        //a move is now a single adjustment between two locations; there is no transfer to read back
+        var adjustment = response.Changes?.FirstOrDefault(change => change.Adjustment != null)?.Adjustment;
+        var transferId = adjustment?.Id
             ?? throw new NopException("Square did not report the transfer");
 
-        //read the transfer back: it is complete once the stock is in stock at the destination
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var transferResponse = await client.Inventory.RetrieveInventoryTransfer(new RetrieveInventoryTransferRequest { TransferId = transferId })
-            ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(transferResponse.Errors);
-
-        var state = transferResponse.Transfer?.State;
+        var state = adjustment.ToState;
         bool completed;
         if (state == InventoryState.InStock)
             completed = true;
