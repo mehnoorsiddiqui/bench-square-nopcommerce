@@ -17,6 +17,8 @@ public class StubSquare : HttpMessageHandler, ISquareClientFactory
 
     public Dictionary<string, string> RequestBodies { get; } = new();
 
+    public List<string> Calls { get; } = new();
+
     /// <summary>
     /// Sets the response of a call, e.g. Respond("GET /v2/customers/C1", new RetrieveCustomerResponse { ... })
     /// </summary>
@@ -38,6 +40,7 @@ public class StubSquare : HttpMessageHandler, ISquareClientFactory
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var call = $"{request.Method} {request.RequestUri!.AbsolutePath}";
+        Calls.Add(call);
         if (request.Content != null)
             RequestBodies[call] = await request.Content.ReadAsStringAsync(cancellationToken);
 
