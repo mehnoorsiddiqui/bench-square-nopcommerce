@@ -50,7 +50,7 @@ public class SquareCustomerLinkService
         try
         {
             var response = await client.CustomerCustomAttributes.RetrieveCustomerCustomAttributeDefinition(
-                new RetrieveCustomerCustomAttributeDefinitionOperationRequest { Key = AttributeKey });
+                new RetrieveCustomerCustomAttributeDefinitionRequest { Key = AttributeKey });
             SquareResponse.ThrowIfErrors(response?.Errors);
         }
         catch (ApiException<RawError> exception) when (IsNotFound(exception))
@@ -124,7 +124,7 @@ public class SquareCustomerLinkService
         var client = await _squareClientFactory.CreateAsync(storeId);
         try
         {
-            var response = await client.CustomerCustomAttributes.RetrieveCustomerCustomAttribute(new RetrieveCustomerCustomAttributeOperationRequest
+            var response = await client.CustomerCustomAttributes.RetrieveCustomerCustomAttribute(new RetrieveCustomerCustomAttributeRequest
             {
                 CustomerId = squareCustomerId,
                 Key = AttributeKey

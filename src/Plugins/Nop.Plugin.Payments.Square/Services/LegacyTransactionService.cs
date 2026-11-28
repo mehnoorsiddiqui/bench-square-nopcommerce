@@ -54,8 +54,12 @@ public record LegacyTransactionReference(string LocationId, string TransactionId
 public record LegacyTenderBalance(string TenderId, string Currency, long Paid, long Refundable);
 
 /// <summary>
-/// Captures, voids and refunds orders paid with Square's legacy Transactions API
+/// Refunds orders paid with Square's legacy Transactions API
 /// </summary>
+/// <remarks>
+/// Square no longer offers capturing or voiding a legacy transaction (the Transactions API keeps only listing and
+/// retrieving), so a legacy order created with delayed capture cannot be captured or voided from the store.
+/// </remarks>
 public class LegacyTransactionService
 {
     #region Fields
@@ -88,46 +92,6 @@ public class LegacyTransactionService
     #region Methods
 
     /// <summary>
-    /// Captures a legacy transaction created with delayed capture
-    /// </summary>
-    /// <param name="reference">Legacy transaction reference</param>
-    /// <param name="storeId">Store identifier</param>
-    /// <returns>A task that represents the asynchronous operation</returns>
-    public async Task CaptureAsync(LegacyTransactionReference reference, int storeId)
-    {
-        ArgumentNullException.ThrowIfNull(reference);
-
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.CaptureTransaction(new CaptureTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(response.Errors);
-    }
-
-    /// <summary>
-    /// Voids a legacy transaction created with delayed capture
-    /// </summary>
-    /// <param name="reference">Legacy transaction reference</param>
-    /// <param name="storeId">Store identifier</param>
-    /// <returns>A task that represents the asynchronous operation</returns>
-    public async Task VoidAsync(LegacyTransactionReference reference, int storeId)
-    {
-        ArgumentNullException.ThrowIfNull(reference);
-
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.VoidTransaction(new VoidTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(response.Errors);
-    }
-
-    /// <summary>
     /// Gets what can still be refunded on each tender of a legacy transaction
     /// </summary>
     /// <param name="reference">Legacy transaction reference</param>
@@ -148,14 +112,23 @@ public class LegacyTransactionService
 
         var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
         var refunds = transaction.Refunds ?? [];
+        var tenders = transaction.Tenders ?? [];
 
-        return (transaction.Tenders ?? [])
+        //Square may leave out the refunded tender: such a refund still returned money from this transaction.
+        //With a single tender it can only be that one; with several, which tender it came from is unknown,
+        //so it is counted against each of them rather than letting a tender be refunded twice
+        var unattributedRefunded = refunds
+            .Where(refund => string.IsNullOrEmpty(refund.TenderId) && IsActiveRefund(refund))
+            .Sum(refund => refund.AmountMoney.Amount ?? 0);
+
+        return tenders
             .Select(tender =>
             {
                 var paid = tender.AmountMoney?.Amount ?? 0;
                 var refunded = refunds
                     .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
-                    .Sum(refund => refund.AmountMoney.Amount ?? 0);
+                    .Sum(refund => refund.AmountMoney.Amount ?? 0)
+                    + unattributedRefunded;
 
                 return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
             })
