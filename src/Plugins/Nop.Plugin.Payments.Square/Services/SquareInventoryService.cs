@@ -81,7 +81,8 @@ public class SquareInventoryService
             Adjustment = new InventoryAdjustment
             {
                 CatalogObjectId = catalogObjectId,
-                LocationId = locationId,
+                FromLocationId = locationId,
+                ToLocationId = locationId,
                 FromState = quantityDelta > 0 ? InventoryState.None : InventoryState.InStock,
                 ToState = quantityDelta > 0 ? InventoryState.InStock : InventoryState.Sold,
                 Quantity = FormatQuantity(Math.Abs(quantityDelta)),
@@ -100,46 +101,19 @@ public class SquareInventoryService
     /// <param name="occurredAtUtc">When the move happened</param>
     /// <param name="storeId">Store identifier</param>
     /// <returns>The asynchronous task whose result contains the result of the move</returns>
-    public async Task<StockMoveResult> MoveStockAsync(string catalogObjectId, string fromLocationId, string toLocationId,
+    /// <remarks>
+    /// Square SDK 5.0.0 removed inventory transfers (the TRANSFER change type, InventoryTransfer and
+    /// RetrieveInventoryTransfer) and names no replacement, so a move between locations can no longer be sent.
+    /// </remarks>
+    /// <exception cref="NopException">Always: Square no longer supports inventory transfers through this API</exception>
+    public Task<StockMoveResult> MoveStockAsync(string catalogObjectId, string fromLocationId, string toLocationId,
         int quantity, DateTime occurredAtUtc, int storeId)
     {
         if (quantity <= 0)
-            throw new ArgumentOutOfRangeException(nameof(quantity), "The quantity to move must be positive");
+            return Task.FromException<StockMoveResult>(new ArgumentOutOfRangeException(nameof(quantity), "The quantity to move must be positive"));
 
-        var response = await ChangeInventoryAsync(new InventoryChange
-        {
-            Type = InventoryChangeType.Transfer,
-            Transfer = new InventoryTransfer
-            {
-                CatalogObjectId = catalogObjectId,
-                FromLocationId = fromLocationId,
-                ToLocationId = toLocationId,
-                State = InventoryState.InStock,
-                Quantity = FormatQuantity(quantity),
-                OccurredAt = FormatTime(occurredAtUtc)
-            }
-        }, storeId);
-
-        var transferId = response.Changes?.FirstOrDefault(change => change.Transfer != null)?.Transfer?.Id
-            ?? throw new NopException("Square did not report the transfer");
-
-        //read the transfer back: it is complete once the stock is in stock at the destination
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var transferResponse = await client.Inventory.RetrieveInventoryTransfer(new RetrieveInventoryTransferRequest { TransferId = transferId })
-            ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(transferResponse.Errors);
-
-        var state = transferResponse.Transfer?.State;
-        bool completed;
-        if (state == InventoryState.InStock)
-            completed = true;
-        else if (state == InventoryState.InTransit || state == InventoryState.InTransitTo)
-            completed = false;
-        else
-            throw new NopException($"Unexpected state of transfer {transferId}: {state?.Value}");
-
-        return new StockMoveResult(transferId, completed);
+        return Task.FromException<StockMoveResult>(
+            new NopException("Moving stock between Square locations is not supported: the Square SDK no longer provides inventory transfers"));
     }
 
     /// <summary>
