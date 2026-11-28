@@ -81,7 +81,8 @@ public class SquareInventoryServiceTests
 
         var change = square.RequestBody<BatchChangeInventoryRequest>("POST /v2/inventory/changes/batch-create").Changes!.Single();
         Assert.That(change.Type, Is.EqualTo(InventoryChangeType.Adjustment));
-        Assert.That(change.Adjustment!.LocationId, Is.EqualTo("L1"));
+        Assert.That(change.Adjustment!.ToLocationId, Is.EqualTo("L1"));
+        Assert.That(change.Adjustment.FromLocationId, Is.Null);
         Assert.That(change.Adjustment.FromState, Is.EqualTo(InventoryState.None));
         Assert.That(change.Adjustment.ToState, Is.EqualTo(InventoryState.InStock));
         Assert.That(change.Adjustment.Quantity, Is.EqualTo("5"));
