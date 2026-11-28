@@ -62,6 +62,10 @@ public class SquareCardService
             onInterac: () => "Interac",
             onEftpos: () => "EFTPOS",
             onFelica: () => "Card",
+            onQuicpay: () => "Card",
+            onId: () => "Card",
+            onTransportationIc: () => "Card",
+            onCarnet: () => "Card",
             onEbt: () => "Card",
             otherwise: _ => "Card");
 
@@ -99,7 +103,7 @@ public class SquareCardService
             if (page >= MaxCardPages)
                 throw new NopException($"The customer has more than {MaxCardPages} pages of saved cards");
 
-            var response = await client.Cards.ListCards(new ListCardsOperationRequest { CustomerId = squareCustomerId, Cursor = cursor })
+            var response = await client.Cards.ListCards(new ListCardsRequest { CustomerId = squareCustomerId, Cursor = cursor })
                 ?? throw new NopException("No service response");
 
             SquareResponse.ThrowIfErrors(response.Errors);
