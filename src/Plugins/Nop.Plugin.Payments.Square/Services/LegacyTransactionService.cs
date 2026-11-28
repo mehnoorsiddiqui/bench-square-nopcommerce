@@ -93,18 +93,13 @@ public class LegacyTransactionService
     /// <param name="reference">Legacy transaction reference</param>
     /// <param name="storeId">Store identifier</param>
     /// <returns>A task that represents the asynchronous operation</returns>
-    public async Task CaptureAsync(LegacyTransactionReference reference, int storeId)
+    /// <exception cref="NopException">Always: Square SDK 5.0.0 no longer offers CaptureTransaction</exception>
+    public Task CaptureAsync(LegacyTransactionReference reference, int storeId)
     {
         ArgumentNullException.ThrowIfNull(reference);
 
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.CaptureTransaction(new CaptureTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(response.Errors);
+        //Square SDK 5.0.0 removed the Transactions API's CaptureTransaction and names no replacement
+        throw new NopException($"Capturing legacy transaction {reference.TransactionId} is not supported by the Square SDK in use");
     }
 
     /// <summary>
@@ -113,18 +108,13 @@ public class LegacyTransactionService
     /// <param name="reference">Legacy transaction reference</param>
     /// <param name="storeId">Store identifier</param>
     /// <returns>A task that represents the asynchronous operation</returns>
-    public async Task VoidAsync(LegacyTransactionReference reference, int storeId)
+    /// <exception cref="NopException">Always: Square SDK 5.0.0 no longer offers VoidTransaction</exception>
+    public Task VoidAsync(LegacyTransactionReference reference, int storeId)
     {
         ArgumentNullException.ThrowIfNull(reference);
 
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.VoidTransaction(new VoidTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(response.Errors);
+        //Square SDK 5.0.0 removed the Transactions API's VoidTransaction and names no replacement
+        throw new NopException($"Voiding legacy transaction {reference.TransactionId} is not supported by the Square SDK in use");
     }
 
     /// <summary>
