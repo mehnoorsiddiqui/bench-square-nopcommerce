@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Nop.Core;
 using Nop.Plugin.Payments.Square.Domain;
@@ -380,47 +380,6 @@ public class PaymentSquareController : BasePaymentController
         }
 
         return RedirectToRoute(SquarePaymentDefaults.SavedCardsRoute);
-    }
-
-    /// <summary>
-    /// Moves Square stock of a product between the locations of two warehouses
-    /// </summary>
-    [HttpPost]
-    [AuthorizeAdmin]
-    [Area(AreaNames.ADMIN)]
-    public async Task<IActionResult> MoveStock(int productId, int fromWarehouseId, int toWarehouseId, int quantity)
-    {
-        if (!await _permissionService.AuthorizeAsync(StandardPermissionProvider.ManageProducts))
-            return AccessDeniedView();
-
-        var storeId = (await _storeContext.GetCurrentStoreAsync()).Id;
-        var product = await _productService.GetProductByIdAsync(productId);
-        var variationId = product == null ? null
-            : await _genericAttributeService.GetAttributeAsync<string>(product, SquarePaymentDefaults.CatalogVariationIdAttribute);
-        if (string.IsNullOrEmpty(variationId))
-            return Json(new { success = false, error = "The product is not published to Square" });
-
-        async Task<string> getLocationIdAsync(int warehouseId)
-        {
-            var warehouse = await _shippingService.GetWarehouseByIdAsync(warehouseId);
-            return warehouse == null ? null
-                : await _genericAttributeService.GetAttributeAsync<string>(warehouse, SquarePaymentDefaults.WarehouseLocationIdAttribute);
-        }
-
-        var fromLocationId = await getLocationIdAsync(fromWarehouseId);
-        var toLocationId = await getLocationIdAsync(toWarehouseId);
-        if (string.IsNullOrEmpty(fromLocationId) || string.IsNullOrEmpty(toLocationId))
-            return Json(new { success = false, error = "Both warehouses must be mapped to Square locations" });
-
-        try
-        {
-            var result = await _squareInventoryService.MoveStockAsync(variationId, fromLocationId, toLocationId, quantity, DateTime.UtcNow, storeId);
-            return Json(new { success = true, id = result.Id, completed = result.Completed });
-        }
-        catch (Exception exception)
-        {
-            return Json(new { success = false, error = exception.Message });
-        }
     }
 
     #endregion
