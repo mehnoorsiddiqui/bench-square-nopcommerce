@@ -81,7 +81,9 @@ public class SquareInventoryService
             Adjustment = new InventoryAdjustment
             {
                 CatalogObjectId = catalogObjectId,
-                LocationId = locationId,
+                //the stock stays at the one location: it is tracked there before and after the adjustment
+                FromLocationId = locationId,
+                ToLocationId = locationId,
                 FromState = quantityDelta > 0 ? InventoryState.None : InventoryState.InStock,
                 ToState = quantityDelta > 0 ? InventoryState.InStock : InventoryState.Sold,
                 Quantity = FormatQuantity(Math.Abs(quantityDelta)),
@@ -106,31 +108,34 @@ public class SquareInventoryService
         if (quantity <= 0)
             throw new ArgumentOutOfRangeException(nameof(quantity), "The quantity to move must be positive");
 
+        //Square no longer records transfers as their own kind of change: a move is an adjustment of in-stock
+        //quantity that is tracked at the source location before it and at the destination location after it
         var response = await ChangeInventoryAsync(new InventoryChange
         {
-            Type = InventoryChangeType.Transfer,
-            Transfer = new InventoryTransfer
+            Type = InventoryChangeType.Adjustment,
+            Adjustment = new InventoryAdjustment
             {
                 CatalogObjectId = catalogObjectId,
                 FromLocationId = fromLocationId,
                 ToLocationId = toLocationId,
-                State = InventoryState.InStock,
+                FromState = InventoryState.InStock,
+                ToState = InventoryState.InStock,
                 Quantity = FormatQuantity(quantity),
                 OccurredAt = FormatTime(occurredAtUtc)
             }
         }, storeId);
 
-        var transferId = response.Changes?.FirstOrDefault(change => change.Transfer != null)?.Transfer?.Id
+        var transferId = response.Changes?.FirstOrDefault(change => change.Adjustment != null)?.Adjustment?.Id
             ?? throw new NopException("Square did not report the transfer");
 
-        //read the transfer back: it is complete once the stock is in stock at the destination
+        //read the move back: it is complete once the stock is in stock at the destination
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var transferResponse = await client.Inventory.RetrieveInventoryTransfer(new RetrieveInventoryTransferRequest { TransferId = transferId })
+        var adjustmentResponse = await client.Inventory.RetrieveInventoryAdjustment(new RetrieveInventoryAdjustmentRequest { AdjustmentId = transferId })
             ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(transferResponse.Errors);
+        SquareResponse.ThrowIfErrors(adjustmentResponse.Errors);
 
-        var state = transferResponse.Transfer?.State;
+        var state = adjustmentResponse.Adjustment?.ToState;
         bool completed;
         if (state == InventoryState.InStock)
             completed = true;
