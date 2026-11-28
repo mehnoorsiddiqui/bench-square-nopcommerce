@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using Nop.Core;
 using Square.Models;
 using Square.Models.Enums;
+using Square.Requests.Payments;
 using Square.Requests.Refunds;
 using Square.Requests.Transactions;
 
@@ -83,6 +84,30 @@ public class LegacyTransactionService
         return refund.Status == RefundStatus.Pending || refund.Status == RefundStatus.Approved;
     }
 
+    /// <summary>
+    /// Gets the identifiers of the tenders of a legacy transaction
+    /// </summary>
+    private async Task<IList<string>> GetTenderIdsAsync(LegacyTransactionReference reference, int storeId)
+    {
+        var client = await _squareClientFactory.CreateAsync(storeId);
+        var response = await client.Transactions.RetrieveTransaction(new RetrieveTransactionRequest
+        {
+            LocationId = reference.LocationId,
+            TransactionId = reference.TransactionId
+        }) ?? throw new NopException("No service response");
+
+        SquareResponse.ThrowIfErrors(response.Errors);
+
+        var tenderIds = (response.Transaction?.Tenders ?? [])
+            .Select(tender => tender.Id)
+            .Where(id => !string.IsNullOrEmpty(id))
+            .ToList();
+        if (!tenderIds.Any())
+            throw new NopException($"Transaction {reference.TransactionId} has no tenders");
+
+        return tenderIds;
+    }
+
     #endregion
 
     #region Methods
@@ -97,14 +122,19 @@ public class LegacyTransactionService
     {
         ArgumentNullException.ThrowIfNull(reference);
 
+        //the SDK no longer has the legacy capture endpoint; a legacy tender's identifier is the identifier
+        //of its payment in the Payments API, so each tender is completed there
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.CaptureTransaction(new CaptureTransactionRequest
+        foreach (var tenderId in await GetTenderIdsAsync(reference, storeId))
         {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
+            var response = await client.Payments.CompletePayment(new CompletePaymentOperationRequest
+            {
+                PaymentId = tenderId,
+                Body = new CompletePaymentRequest()
+            }) ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+            SquareResponse.ThrowIfErrors(response.Errors);
+        }
     }
 
     /// <summary>
@@ -117,14 +147,15 @@ public class LegacyTransactionService
     {
         ArgumentNullException.ThrowIfNull(reference);
 
+        //the SDK no longer has the legacy void endpoint; each tender is canceled as a payment in the Payments API
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.VoidTransaction(new VoidTransactionRequest
+        foreach (var tenderId in await GetTenderIdsAsync(reference, storeId))
         {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
+            var response = await client.Payments.CancelPayment(new CancelPaymentRequest { PaymentId = tenderId })
+                ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+            SquareResponse.ThrowIfErrors(response.Errors);
+        }
     }
 
     /// <summary>
