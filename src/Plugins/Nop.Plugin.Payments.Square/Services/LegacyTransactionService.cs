@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using Nop.Core;
 using Square.Models;
 using Square.Models.Enums;
+using Square.Requests.Payments;
 using Square.Requests.Refunds;
 using Square.Requests.Transactions;
 
@@ -83,6 +84,22 @@ public class LegacyTransactionService
         return refund.Status == RefundStatus.Pending || refund.Status == RefundStatus.Approved;
     }
 
+    /// <summary>
+    /// Retrieves a legacy transaction
+    /// </summary>
+    private static async Task<Transaction> RetrieveTransactionAsync(global::Square.SquareClient client, LegacyTransactionReference reference)
+    {
+        var response = await client.Transactions.RetrieveTransaction(new RetrieveTransactionRequest
+        {
+            LocationId = reference.LocationId,
+            TransactionId = reference.TransactionId
+        }) ?? throw new NopException("No service response");
+
+        SquareResponse.ThrowIfErrors(response.Errors);
+
+        return response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
+    }
+
     #endregion
 
     #region Methods
@@ -90,6 +107,10 @@ public class LegacyTransactionService
     /// <summary>
     /// Captures a legacy transaction created with delayed capture
     /// </summary>
+    /// <remarks>
+    /// The SDK no longer has the Transactions API capture endpoint, so each tender is completed as its payment
+    /// in the Payments API (a legacy tender's identifier is the identifier of its payment).
+    /// </remarks>
     /// <param name="reference">Legacy transaction reference</param>
     /// <param name="storeId">Store identifier</param>
     /// <returns>A task that represents the asynchronous operation</returns>
@@ -98,18 +119,27 @@ public class LegacyTransactionService
         ArgumentNullException.ThrowIfNull(reference);
 
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.CaptureTransaction(new CaptureTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
+        var transaction = await RetrieveTransactionAsync(client, reference);
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+        foreach (var tender in transaction.Tenders ?? [])
+        {
+            var response = await client.Payments.CompletePayment(new CompletePaymentOperationRequest
+            {
+                PaymentId = tender.Id,
+                Body = new CompletePaymentRequest()
+            }) ?? throw new NopException("No service response");
+
+            SquareResponse.ThrowIfErrors(response.Errors);
+        }
     }
 
     /// <summary>
     /// Voids a legacy transaction created with delayed capture
     /// </summary>
+    /// <remarks>
+    /// The SDK no longer has the Transactions API void endpoint, so each tender is canceled as its payment
+    /// in the Payments API (a legacy tender's identifier is the identifier of its payment).
+    /// </remarks>
     /// <param name="reference">Legacy transaction reference</param>
     /// <param name="storeId">Store identifier</param>
     /// <returns>A task that represents the asynchronous operation</returns>
@@ -118,13 +148,15 @@ public class LegacyTransactionService
         ArgumentNullException.ThrowIfNull(reference);
 
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.VoidTransaction(new VoidTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
+        var transaction = await RetrieveTransactionAsync(client, reference);
 
-        SquareResponse.ThrowIfErrors(response.Errors);
+        foreach (var tender in transaction.Tenders ?? [])
+        {
+            var response = await client.Payments.CancelPayment(new CancelPaymentRequest { PaymentId = tender.Id })
+                ?? throw new NopException("No service response");
+
+            SquareResponse.ThrowIfErrors(response.Errors);
+        }
     }
 
     /// <summary>
@@ -138,26 +170,24 @@ public class LegacyTransactionService
         ArgumentNullException.ThrowIfNull(reference);
 
         var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.RetrieveTransaction(new RetrieveTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
+        var transaction = await RetrieveTransactionAsync(client, reference);
+        var activeRefunds = (transaction.Refunds ?? []).Where(IsActiveRefund).ToList();
 
-        SquareResponse.ThrowIfErrors(response.Errors);
-
-        var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
-        var refunds = transaction.Refunds ?? [];
+        //a refund that does not name its tender still returned money from the transaction; as it may have been
+        //taken from any tender, it is counted against each of them, so a tender is never refunded beyond what is left
+        var unattributed = activeRefunds
+            .Where(refund => string.IsNullOrEmpty(refund.TenderId))
+            .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
         return (transaction.Tenders ?? [])
             .Select(tender =>
             {
                 var paid = tender.AmountMoney?.Amount ?? 0;
-                var refunded = refunds
-                    .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
+                var refunded = activeRefunds
+                    .Where(refund => refund.TenderId == tender.Id)
                     .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
-                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
+                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, Math.Max(0, paid - refunded - unattributed));
             })
             .ToList();
     }
