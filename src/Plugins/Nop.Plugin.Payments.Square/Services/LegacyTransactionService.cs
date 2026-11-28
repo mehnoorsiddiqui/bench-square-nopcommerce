@@ -54,7 +54,7 @@ public record LegacyTransactionReference(string LocationId, string TransactionId
 public record LegacyTenderBalance(string TenderId, string Currency, long Paid, long Refundable);
 
 /// <summary>
-/// Captures, voids and refunds orders paid with Square's legacy Transactions API
+/// Refunds orders paid with Square's legacy Transactions API (SDK 5.0.0 no longer offers capturing or voiding them)
 /// </summary>
 public class LegacyTransactionService
 {
@@ -88,46 +88,6 @@ public class LegacyTransactionService
     #region Methods
 
     /// <summary>
-    /// Captures a legacy transaction created with delayed capture
-    /// </summary>
-    /// <param name="reference">Legacy transaction reference</param>
-    /// <param name="storeId">Store identifier</param>
-    /// <returns>A task that represents the asynchronous operation</returns>
-    public async Task CaptureAsync(LegacyTransactionReference reference, int storeId)
-    {
-        ArgumentNullException.ThrowIfNull(reference);
-
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.CaptureTransaction(new CaptureTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(response.Errors);
-    }
-
-    /// <summary>
-    /// Voids a legacy transaction created with delayed capture
-    /// </summary>
-    /// <param name="reference">Legacy transaction reference</param>
-    /// <param name="storeId">Store identifier</param>
-    /// <returns>A task that represents the asynchronous operation</returns>
-    public async Task VoidAsync(LegacyTransactionReference reference, int storeId)
-    {
-        ArgumentNullException.ThrowIfNull(reference);
-
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.VoidTransaction(new VoidTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(response.Errors);
-    }
-
-    /// <summary>
     /// Gets what can still be refunded on each tender of a legacy transaction
     /// </summary>
     /// <param name="reference">Legacy transaction reference</param>
@@ -147,17 +107,23 @@ public class LegacyTransactionService
         SquareResponse.ThrowIfErrors(response.Errors);
 
         var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
-        var refunds = transaction.Refunds ?? [];
+        var tenders = transaction.Tenders ?? [];
+        var activeRefunds = (transaction.Refunds ?? []).Where(IsActiveRefund).ToList();
 
-        return (transaction.Tenders ?? [])
+        //a refund may not name its tender (optional since SDK 5.0.0); it still returned money from the transaction,
+        //so no tender can have more left than the transaction as a whole
+        var transactionRemaining = tenders.Sum(tender => tender.AmountMoney?.Amount ?? 0)
+            - activeRefunds.Sum(refund => refund.AmountMoney.Amount ?? 0);
+
+        return tenders
             .Select(tender =>
             {
                 var paid = tender.AmountMoney?.Amount ?? 0;
-                var refunded = refunds
-                    .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
+                var refunded = activeRefunds
+                    .Where(refund => refund.TenderId != null && refund.TenderId == tender.Id)
                     .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
-                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
+                return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, Math.Min(paid - refunded, transactionRemaining));
             })
             .ToList();
     }

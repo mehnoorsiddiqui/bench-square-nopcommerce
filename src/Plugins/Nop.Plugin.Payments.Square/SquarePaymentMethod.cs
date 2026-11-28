@@ -461,17 +461,10 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         var storeId = (await _storeContext.GetCurrentStoreAsync()).Id;
         var transactionId = capturePaymentRequest.Order.AuthorizationTransactionId;
 
-        //orders paid with the legacy Transactions API are captured there
+        //orders paid with the legacy Transactions API were captured there; SDK 5.0.0 no longer offers that call,
+        //and the stored reference is not a payment identifier, so it must not reach the Payments API
         if (LegacyTransactionReference.TryParse(transactionId, out var legacyTransaction))
-        {
-            await _legacyTransactionService.CaptureAsync(legacyTransaction, storeId);
-
-            return new CapturePaymentResult
-            {
-                NewPaymentStatus = PaymentStatus.Paid,
-                CaptureTransactionId = transactionId
-            };
-        }
+            throw new NopException($"Transaction {legacyTransaction.TransactionId} was paid with Square's legacy Transactions API, which can no longer be captured");
 
         var completePaymentRequest = new SquareModel.CompletePaymentRequest();
         var (successfullyCompleted, error) = await _squarePaymentManager.CompletePaymentAsync(transactionId, completePaymentRequest, storeId);
@@ -586,13 +579,10 @@ public class SquarePaymentMethod : BasePlugin, IPaymentMethod
         var storeId = (await _storeContext.GetCurrentStoreAsync()).Id;
         var transactionId = voidPaymentRequest.Order.AuthorizationTransactionId;
 
-        //orders paid with the legacy Transactions API are voided there
+        //orders paid with the legacy Transactions API were voided there; SDK 5.0.0 no longer offers that call,
+        //and the stored reference is not a payment identifier, so it must not reach the Payments API
         if (LegacyTransactionReference.TryParse(transactionId, out var legacyTransaction))
-        {
-            await _legacyTransactionService.VoidAsync(legacyTransaction, storeId);
-
-            return new VoidPaymentResult { NewPaymentStatus = PaymentStatus.Voided };
-        }
+            throw new NopException($"Transaction {legacyTransaction.TransactionId} was paid with Square's legacy Transactions API, which can no longer be voided");
 
         var (successfullyCanceled, error) = await _squarePaymentManager.CancelPaymentAsync(transactionId, storeId);
         if (!successfullyCanceled)
