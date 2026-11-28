@@ -3,6 +3,7 @@ using Nop.Core;
 using Square.Models;
 using Square.Models.Enums;
 using Square.Requests.Inventory;
+using Square.Requests.TransferOrderApi;
 
 namespace Nop.Plugin.Payments.Square.Services;
 
@@ -81,7 +82,9 @@ public class SquareInventoryService
             Adjustment = new InventoryAdjustment
             {
                 CatalogObjectId = catalogObjectId,
-                LocationId = locationId,
+                //the stock stays at one location: it is tracked there before and after the adjustment
+                FromLocationId = locationId,
+                ToLocationId = locationId,
                 FromState = quantityDelta > 0 ? InventoryState.None : InventoryState.InStock,
                 ToState = quantityDelta > 0 ? InventoryState.InStock : InventoryState.Sold,
                 Quantity = FormatQuantity(Math.Abs(quantityDelta)),
@@ -97,7 +100,7 @@ public class SquareInventoryService
     /// <param name="fromLocationId">Square location the stock leaves</param>
     /// <param name="toLocationId">Square location the stock arrives at</param>
     /// <param name="quantity">Quantity to move</param>
-    /// <param name="occurredAtUtc">When the move happened</param>
+    /// <param name="occurredAtUtc">When the move happened (not sent: a Square transfer order records its own times)</param>
     /// <param name="storeId">Store identifier</param>
     /// <returns>The asynchronous task whose result contains the result of the move</returns>
     public async Task<StockMoveResult> MoveStockAsync(string catalogObjectId, string fromLocationId, string toLocationId,
@@ -106,38 +109,68 @@ public class SquareInventoryService
         if (quantity <= 0)
             throw new ArgumentOutOfRangeException(nameof(quantity), "The quantity to move must be positive");
 
-        var response = await ChangeInventoryAsync(new InventoryChange
+        //stock moves between locations as a transfer order: created as a draft, started (the stock leaves the
+        //source location), then received in full (the stock is in stock at the destination location)
+        var client = await _squareClientFactory.CreateAsync(storeId);
+        var createResponse = await client.TransferOrderApi.CreateTransferOrder(new CreateTransferOrderOperationRequest
         {
-            Type = InventoryChangeType.Transfer,
-            Transfer = new InventoryTransfer
+            Body = new CreateTransferOrderRequest
             {
-                CatalogObjectId = catalogObjectId,
-                FromLocationId = fromLocationId,
-                ToLocationId = toLocationId,
-                State = InventoryState.InStock,
-                Quantity = FormatQuantity(quantity),
-                OccurredAt = FormatTime(occurredAtUtc)
+                IdempotencyKey = Guid.NewGuid().ToString(),
+                TransferOrder = new CreateTransferOrderData
+                {
+                    SourceLocationId = fromLocationId,
+                    DestinationLocationId = toLocationId,
+                    LineItems = [new CreateTransferOrderLineData { ItemVariationId = catalogObjectId, QuantityOrdered = FormatQuantity(quantity) }]
+                }
             }
-        }, storeId);
+        }) ?? throw new NopException("No service response");
 
-        var transferId = response.Changes?.FirstOrDefault(change => change.Transfer != null)?.Transfer?.Id
+        SquareResponse.ThrowIfErrors(createResponse.Errors);
+
+        var transferId = createResponse.TransferOrder?.Id
             ?? throw new NopException("Square did not report the transfer");
 
-        //read the transfer back: it is complete once the stock is in stock at the destination
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var transferResponse = await client.Inventory.RetrieveInventoryTransfer(new RetrieveInventoryTransferRequest { TransferId = transferId })
-            ?? throw new NopException("No service response");
+        var startResponse = await client.TransferOrderApi.StartTransferOrder(new StartTransferOrderOperationRequest
+        {
+            TransferOrderId = transferId,
+            Body = new StartTransferOrderRequest
+            {
+                IdempotencyKey = Guid.NewGuid().ToString(),
+                Version = createResponse.TransferOrder.Version
+            }
+        }) ?? throw new NopException("No service response");
 
-        SquareResponse.ThrowIfErrors(transferResponse.Errors);
+        SquareResponse.ThrowIfErrors(startResponse.Errors);
 
-        var state = transferResponse.Transfer?.State;
+        var lineUid = startResponse.TransferOrder?.LineItems?.FirstOrDefault(line => line.ItemVariationId == catalogObjectId)?.Uid
+            ?? throw new NopException($"Square did not report the line of transfer {transferId}");
+
+        var receiveResponse = await client.TransferOrderApi.ReceiveTransferOrder(new ReceiveTransferOrderOperationRequest
+        {
+            TransferOrderId = transferId,
+            Body = new ReceiveTransferOrderRequest
+            {
+                IdempotencyKey = Guid.NewGuid().ToString(),
+                Receipt = new TransferOrderGoodsReceipt
+                {
+                    LineItems = [new TransferOrderGoodsReceiptLineItem { TransferOrderLineUid = lineUid, QuantityReceived = FormatQuantity(quantity) }]
+                },
+                Version = startResponse.TransferOrder.Version
+            }
+        }) ?? throw new NopException("No service response");
+
+        SquareResponse.ThrowIfErrors(receiveResponse.Errors);
+
+        //the transfer is complete once all of its stock is received at the destination
+        var status = receiveResponse.TransferOrder?.Status;
         bool completed;
-        if (state == InventoryState.InStock)
+        if (status == TransferOrderStatus.Completed)
             completed = true;
-        else if (state == InventoryState.InTransit || state == InventoryState.InTransitTo)
+        else if (status == TransferOrderStatus.Started || status == TransferOrderStatus.PartiallyReceived)
             completed = false;
         else
-            throw new NopException($"Unexpected state of transfer {transferId}: {state?.Value}");
+            throw new NopException($"Unexpected status of transfer {transferId}: {status?.Value}");
 
         return new StockMoveResult(transferId, completed);
     }

@@ -61,6 +61,51 @@ public class LegacyTransactionServiceTests
     }
 
     [Test]
+    public async Task RefundableBalance_HoldsRefundsWithoutTenderAgainstTheTenders()
+    {
+        var square = new StubSquare().Respond("GET /v2/locations/L1/transactions/T1", new RetrieveTransactionResponse
+        {
+            Transaction = new Transaction
+            {
+                Id = "T1",
+                LocationId = "L1",
+                Tenders = [new Tender { Id = "TND1", Type = TenderType.Card, AmountMoney = new Money { Amount = 10000, Currency = Currency.Usd } }],
+                Refunds =
+                [
+                    new Refund { Id = "R1", LocationId = "L1", TenderId = "TND1", Reason = "damaged", Status = RefundStatus.Approved, AmountMoney = new Money { Amount = 2500, Currency = Currency.Usd } },
+                    new Refund { Id = "R2", LocationId = "L1", Reason = "late", Status = RefundStatus.Pending, AmountMoney = new Money { Amount = 7000, Currency = Currency.Usd } }
+                ]
+            }
+        });
+        var service = new LegacyTransactionService(square);
+
+        var balances = await service.GetRefundableBalancesAsync(new LegacyTransactionReference("L1", "T1"), 1);
+
+        Assert.That(balances.Single().Refundable, Is.EqualTo(500));
+        Assert.ThrowsAsync<NopException>(() => service.RefundAsync(new LegacyTransactionReference("L1", "T1"), 1000, "USD", 1));
+    }
+
+    [Test]
+    public async Task Capture_CompletesTheTenderPayments()
+    {
+        var square = new StubSquare()
+            .Respond("GET /v2/locations/L1/transactions/T1", new RetrieveTransactionResponse
+            {
+                Transaction = new Transaction
+                {
+                    Id = "T1",
+                    LocationId = "L1",
+                    Tenders = [new Tender { Id = "TND1", Type = TenderType.Card, AmountMoney = new Money { Amount = 10000, Currency = Currency.Usd } }]
+                }
+            })
+            .Respond("POST /v2/payments/TND1/complete", new CompletePaymentResponse());
+
+        await new LegacyTransactionService(square).CaptureAsync(new LegacyTransactionReference("L1", "T1"), 1);
+
+        Assert.That(square.RequestBodies.ContainsKey("POST /v2/payments/TND1/complete"), Is.True);
+    }
+
+    [Test]
     public void Reference_RoundTrips()
     {
         Assert.That(LegacyTransactionReference.TryParse("legacy:L1:T1", out var reference), Is.True);
@@ -81,10 +126,46 @@ public class SquareInventoryServiceTests
 
         var change = square.RequestBody<BatchChangeInventoryRequest>("POST /v2/inventory/changes/batch-create").Changes!.Single();
         Assert.That(change.Type, Is.EqualTo(InventoryChangeType.Adjustment));
-        Assert.That(change.Adjustment!.LocationId, Is.EqualTo("L1"));
+        Assert.That(change.Adjustment!.FromLocationId, Is.EqualTo("L1"));
+        Assert.That(change.Adjustment.ToLocationId, Is.EqualTo("L1"));
         Assert.That(change.Adjustment.FromState, Is.EqualTo(InventoryState.None));
         Assert.That(change.Adjustment.ToState, Is.EqualTo(InventoryState.InStock));
         Assert.That(change.Adjustment.Quantity, Is.EqualTo("5"));
+    }
+
+    [Test]
+    public async Task MoveStock_SendsAndReceivesATransferOrder()
+    {
+        var square = new StubSquare()
+            .Respond("POST /v2/transfer-orders", new CreateTransferOrderResponse
+            {
+                TransferOrder = new TransferOrder { Id = "TO1", Status = TransferOrderStatus.Draft, Version = 1 }
+            })
+            .Respond("POST /v2/transfer-orders/TO1/start", new StartTransferOrderResponse
+            {
+                TransferOrder = new TransferOrder
+                {
+                    Id = "TO1",
+                    Status = TransferOrderStatus.Started,
+                    Version = 2,
+                    LineItems = [new TransferOrderLine { Uid = "LINE1", ItemVariationId = "VAR1", QuantityOrdered = "3" }]
+                }
+            })
+            .Respond("POST /v2/transfer-orders/TO1/receive", new ReceiveTransferOrderResponse
+            {
+                TransferOrder = new TransferOrder { Id = "TO1", Status = TransferOrderStatus.Completed, Version = 3 }
+            });
+
+        var result = await new SquareInventoryService(square).MoveStockAsync("VAR1", "L1", "L2", 3, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), 1);
+
+        Assert.That(result, Is.EqualTo(new StockMoveResult("TO1", true)));
+        var created = square.RequestBody<CreateTransferOrderRequest>("POST /v2/transfer-orders").TransferOrder;
+        Assert.That(created.SourceLocationId, Is.EqualTo("L1"));
+        Assert.That(created.DestinationLocationId, Is.EqualTo("L2"));
+        Assert.That(created.LineItems!.Single().QuantityOrdered, Is.EqualTo("3"));
+        var received = square.RequestBody<ReceiveTransferOrderRequest>("POST /v2/transfer-orders/TO1/receive").Receipt.LineItems!.Single();
+        Assert.That(received.TransferOrderLineUid, Is.EqualTo("LINE1"));
+        Assert.That(received.QuantityReceived, Is.EqualTo("3"));
     }
 }
 
