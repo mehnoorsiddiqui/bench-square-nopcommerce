@@ -412,15 +412,9 @@ public class PaymentSquareController : BasePaymentController
         if (string.IsNullOrEmpty(fromLocationId) || string.IsNullOrEmpty(toLocationId))
             return Json(new { success = false, error = "Both warehouses must be mapped to Square locations" });
 
-        try
-        {
-            var result = await _squareInventoryService.MoveStockAsync(variationId, fromLocationId, toLocationId, quantity, DateTime.UtcNow, storeId);
-            return Json(new { success = true, id = result.Id, completed = result.Completed });
-        }
-        catch (Exception exception)
-        {
-            return Json(new { success = false, error = exception.Message });
-        }
+        //ApimaticBench.Square 5.0.0 removed inventory transfers (the TRANSFER change and RetrieveInventoryTransfer),
+        //so stock can no longer be moved between locations in one inventory change
+        return Json(new { success = false, error = "Moving stock between Square locations is not supported by this version of the Square SDK" });
     }
 
     #endregion
