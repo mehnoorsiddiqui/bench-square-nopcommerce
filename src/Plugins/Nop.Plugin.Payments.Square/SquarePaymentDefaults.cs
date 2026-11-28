@@ -96,6 +96,12 @@ public class SquarePaymentDefaults
     /// </remarks>
     public static string PaymentNote => "nopCommerce: {0}";
 
+    /// <summary>
+    /// Error returned when an order paid with the legacy Transactions API is captured or voided
+    /// </summary>
+    public static string LegacyCaptureVoidNotSupported =>
+        "This order was paid with Square's legacy Transactions API, which can no longer be captured or voided from nopCommerce. Complete or cancel it in the Square Dashboard";
+
     public class Status
     {
         /// <summary>
