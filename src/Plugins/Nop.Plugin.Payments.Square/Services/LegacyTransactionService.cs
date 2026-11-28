@@ -50,11 +50,13 @@ public record LegacyTransactionReference(string LocationId, string TransactionId
 /// <param name="TenderId">Tender identifier</param>
 /// <param name="Currency">Currency of the tender</param>
 /// <param name="Paid">Amount paid with the tender, in the smallest currency unit</param>
-/// <param name="Refundable">Amount that can still be refunded, in the smallest currency unit</param>
+/// <param name="Refundable">Amount that can still be refunded, in the smallest currency unit (refunds that do not name
+/// their tender are counted against every tender)</param>
 public record LegacyTenderBalance(string TenderId, string Currency, long Paid, long Refundable);
 
 /// <summary>
-/// Captures, voids and refunds orders paid with Square's legacy Transactions API
+/// Refunds orders paid with Square's legacy Transactions API
+/// (capturing and voiding them is no longer offered by the Square SDK 5.0.0)
 /// </summary>
 public class LegacyTransactionService
 {
@@ -88,46 +90,6 @@ public class LegacyTransactionService
     #region Methods
 
     /// <summary>
-    /// Captures a legacy transaction created with delayed capture
-    /// </summary>
-    /// <param name="reference">Legacy transaction reference</param>
-    /// <param name="storeId">Store identifier</param>
-    /// <returns>A task that represents the asynchronous operation</returns>
-    public async Task CaptureAsync(LegacyTransactionReference reference, int storeId)
-    {
-        ArgumentNullException.ThrowIfNull(reference);
-
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.CaptureTransaction(new CaptureTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(response.Errors);
-    }
-
-    /// <summary>
-    /// Voids a legacy transaction created with delayed capture
-    /// </summary>
-    /// <param name="reference">Legacy transaction reference</param>
-    /// <param name="storeId">Store identifier</param>
-    /// <returns>A task that represents the asynchronous operation</returns>
-    public async Task VoidAsync(LegacyTransactionReference reference, int storeId)
-    {
-        ArgumentNullException.ThrowIfNull(reference);
-
-        var client = await _squareClientFactory.CreateAsync(storeId);
-        var response = await client.Transactions.VoidTransaction(new VoidTransactionRequest
-        {
-            LocationId = reference.LocationId,
-            TransactionId = reference.TransactionId
-        }) ?? throw new NopException("No service response");
-
-        SquareResponse.ThrowIfErrors(response.Errors);
-    }
-
-    /// <summary>
     /// Gets what can still be refunded on each tender of a legacy transaction
     /// </summary>
     /// <param name="reference">Legacy transaction reference</param>
@@ -147,14 +109,20 @@ public class LegacyTransactionService
         SquareResponse.ThrowIfErrors(response.Errors);
 
         var transaction = response.Transaction ?? throw new NopException($"Transaction {reference.TransactionId} was not found");
-        var refunds = transaction.Refunds ?? [];
+        var activeRefunds = (transaction.Refunds ?? []).Where(IsActiveRefund).ToList();
+
+        //a refund may not name its tender; it still returned money from one of the tenders, so it is counted
+        //against every tender (for a single-tender transaction that is exactly its tender), never refunding more than is left
+        var unattributedRefunded = activeRefunds
+            .Where(refund => string.IsNullOrEmpty(refund.TenderId))
+            .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
         return (transaction.Tenders ?? [])
             .Select(tender =>
             {
                 var paid = tender.AmountMoney?.Amount ?? 0;
-                var refunded = refunds
-                    .Where(refund => refund.TenderId == tender.Id && IsActiveRefund(refund))
+                var refunded = unattributedRefunded + activeRefunds
+                    .Where(refund => !string.IsNullOrEmpty(refund.TenderId) && refund.TenderId == tender.Id)
                     .Sum(refund => refund.AmountMoney.Amount ?? 0);
 
                 return new LegacyTenderBalance(tender.Id, tender.AmountMoney?.Currency?.Value, paid, paid - refunded);
