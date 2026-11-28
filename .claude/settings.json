@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\claude-runs\\t13aliusman-task13-square-s4-s6-plugin-gen6-sonnet55medium-008\\repo\\.claude\\hooks\\maxio-process-guard.ps1\""
+          }
+        ],
+        "matcher": "Bash|PowerShell"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\claude-runs\\t13aliusman-task13-square-s4-s6-plugin-gen6-sonnet55medium-008\\repo\\.claude\\hooks\\task13-web-guard.ps1\""
+          }
+        ],
+        "matcher": "WebSearch|WebFetch"
+      }
+    ]
+  }
+}
